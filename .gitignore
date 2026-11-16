@@ -1,0 +1,6 @@
+# Godot 缓存
+.godot/
+# 构建产物
+build/
+# Python 缓存
+__pycache__/

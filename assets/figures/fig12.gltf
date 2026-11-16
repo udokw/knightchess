@@ -1,0 +1,150 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "knight-md2toglb"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "root",
+   "children": [
+    1
+   ]
+  },
+  {
+   "name": "fig12",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "fig12",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "fig12",
+   "pbrMetallicRoughness": {
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.8,
+    "baseColorFactor": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "baseColorTexture": {
+     "index": 0
+    }
+   },
+   "doubleSided": true,
+   "alphaMode": "MASK",
+   "alphaCutoff": 0.4
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 2298,
+   "type": "VEC3",
+   "min": [
+    -11.94000244140625,
+    -0.008329000324010849,
+    -22.716869980096817
+   ],
+   "max": [
+    13.112811334431171,
+    40.062667805701494,
+    29.52195930480957
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 2298,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 2298,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 2298,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 27576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 27576,
+   "byteLength": 27576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 55152,
+   "byteLength": 18384,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 73536,
+   "byteLength": 4596,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 78132,
+   "uri": "fig12.gltf.bin"
+  }
+ ],
+ "images": [
+  {
+   "uri": "../textures/fig12.png"
+  }
+ ],
+ "textures": [
+  {
+   "source": 0,
+   "sampler": 0
+  }
+ ],
+ "samplers": [
+  {
+   "magFilter": 9729,
+   "minFilter": 9987,
+   "wrapS": 10497,
+   "wrapT": 10497
+  }
+ ]
+}

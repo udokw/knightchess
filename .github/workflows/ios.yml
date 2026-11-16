@@ -1,0 +1,74 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  ios:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    env:
+      GODOT_VERSION: 4.3-stable
+      GODOT_TEMPLATE_DIR: 4.3.stable
+      GODOT: /Applications/Godot.app/Contents/MacOS/Godot
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Godot 与 iOS 导出模板
+        run: |
+          set -euo pipefail
+          curl -fL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          unzip -q godot.zip
+          sudo mv Godot.app /Applications/
+          sudo xattr -dr com.apple.quarantine /Applications/Godot.app || true
+
+          curl -fL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          unzip -q templates.tpz -d /tmp/godot_templates
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
+          mv /tmp/godot_templates/templates "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_DIR}"
+
+          "$GODOT" --version
+
+      - name: 导入资源
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . --import
+          "$GODOT" --headless --path . --import
+
+      - name: 导出 Xcode 工程
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import io
+          p = "export_presets.cfg"
+          s = io.open(p, encoding="utf-8-sig").read()
+          s = s.replace("application/export_project_only=false", "application/export_project_only=true")
+          io.open(p, "w", encoding="utf-8").write(s)
+          PY
+          "$GODOT" --headless --path . --export-release "iOS" build/KnightChess.ipa
+          ls -la build
+
+      - name: 构建未签名 ipa
+        run: |
+          set -euo pipefail
+          xcodebuild -project build/KnightChess.xcodeproj -scheme KnightChess \
+            -configuration Release -sdk iphoneos \
+            -archivePath build/KnightChess.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          mkdir -p build/ipa/Payload
+          cp -R build/KnightChess.xcarchive/Products/Applications/KnightChess.app build/ipa/Payload/
+          cd build/ipa
+          zip -qry ../KnightChess-unsigned.ipa Payload
+          ls -lh ../KnightChess-unsigned.ipa
+
+      - name: 上传 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: KnightChess3-unsigned-ipa
+          path: build/KnightChess-unsigned.ipa
+          if-no-files-found: error
