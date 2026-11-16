@@ -49,6 +49,8 @@ jobs:
           p = "export_presets.cfg"
           s = io.open(p, encoding="utf-8-sig").read()
           s = s.replace("application/export_project_only=false", "application/export_project_only=true")
+          # 未签名构建只需要一个非空的 Team ID 占位；正式签名时换成真实值
+          s = s.replace('application/app_store_team_id=""', 'application/app_store_team_id="XXXXXXXXXX"')
           io.open(p, "w", encoding="utf-8").write(s)
           PY
           "$GODOT" --headless --path . --export-release "iOS" build/KnightChess.ipa
