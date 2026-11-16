@@ -34,7 +34,22 @@ godot --path KnightChessGodot
 
 ## iOS 导出（需要 macOS）
 
-Godot 的 iOS 导出器依赖 Xcode，Windows 上无法生成 ipa。步骤：
+Godot 的 iOS 导出器依赖 Xcode，Windows 上无法生成 ipa。两种方式：
+
+### 方式 A：GitHub Actions（无需 Mac）
+
+仓库里已带 `.github/workflows/ios.yml`，push 到 `main` 或手动 `workflow_dispatch`
+就会在 GitHub 的 macOS 运行器上：下载 Godot 4.3 + iOS 导出模板 → 导入资源 →
+导出 Xcode 工程 → `xcodebuild` 构建 → 上传 `KnightChess3-unsigned-ipa` 产物。
+
+产物是**未签名 ipa**，下载后用 Sideloadly / AltStore 以自己的 Apple ID 重签安装
+（免费账号 7 天）。想要签名版可在 workflow 里加证书与描述文件 Secrets
+（`BUILD_CERTIFICATE_BASE64`、`P12_PASSWORD`、`PROVISIONING_PROFILE_BASE64`、`APPLE_TEAM_ID`），
+改用 `xcodebuild -exportArchive`。
+
+> 私有仓库的 macOS 运行器按 10 倍系数消耗 Actions 分钟；公开仓库免费。
+
+### 方式 B：本机 macOS + Xcode
 
 1. 在 macOS 安装 Xcode（含命令行工具）与 Godot 4.3，并在 Godot 里
    `编辑器 → 管理导出模板` 下载 4.3 模板。

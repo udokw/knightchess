@@ -22,17 +22,18 @@ jobs:
       - name: 安装 Godot 与 iOS 导出模板
         run: |
           set -euo pipefail
-          curl -fL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          curl -fL --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
           unzip -q godot.zip
           sudo mv Godot.app /Applications/
           sudo xattr -dr com.apple.quarantine /Applications/Godot.app || true
 
-          curl -fL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          curl -fL --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
           unzip -q templates.tpz -d /tmp/godot_templates
           mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
           mv /tmp/godot_templates/templates "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_DIR}"
 
           "$GODOT" --version
+          ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_DIR}" | head -20
 
       - name: 导入资源
         run: |
@@ -51,17 +52,21 @@ jobs:
           io.open(p, "w", encoding="utf-8").write(s)
           PY
           "$GODOT" --headless --path . --export-release "iOS" build/KnightChess.ipa
+          echo "--- build 目录 ---"
           ls -la build
+          xcodebuild -list -project build/KnightChess.xcodeproj
 
       - name: 构建未签名 ipa
         run: |
           set -euo pipefail
           xcodebuild -project build/KnightChess.xcodeproj -scheme KnightChess \
-            -configuration Release -sdk iphoneos \
+            -configuration Release -destination "generic/platform=iOS" \
             -archivePath build/KnightChess.xcarchive archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          APP=$(/usr/bin/find build/KnightChess.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -1)
+          echo "app: $APP"
           mkdir -p build/ipa/Payload
-          cp -R build/KnightChess.xcarchive/Products/Applications/KnightChess.app build/ipa/Payload/
+          cp -R "$APP" build/ipa/Payload/
           cd build/ipa
           zip -qry ../KnightChess-unsigned.ipa Payload
           ls -lh ../KnightChess-unsigned.ipa
