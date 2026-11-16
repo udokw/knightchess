@@ -53,6 +53,7 @@ jobs:
           s = s.replace('application/app_store_team_id=""', 'application/app_store_team_id="XXXXXXXXXX"')
           io.open(p, "w", encoding="utf-8").write(s)
           PY
+          mkdir -p build
           "$GODOT" --headless --path . --export-release "iOS" build/KnightChess.ipa
           echo "--- build 目录 ---"
           ls -la build
