@@ -6,6 +6,7 @@ const TEAM_NAMES := ["红队", "蓝队", "绿队", "黄队"]
 const TEAM_COLORS := [Color("d9473c"), Color("3d7ec9"), Color("4aa75a"), Color("e2b23c")]
 const FIELDS := 40
 const PIECES_PER_TEAM := 4
+const AI_TEAMS := [1, 2, 3]      # 玩家控制红队，其余三队由 AI 接管
 const BOARD_Y := 3.6
 const PIECE_HEIGHT := 62.0
 
@@ -24,8 +25,8 @@ var shot_path := ""
 
 # 相机
 var cam_yaw := deg_to_rad(38.0)
-var cam_pitch := deg_to_rad(60.0)
-var cam_dist := 1560.0
+var cam_pitch := deg_to_rad(72.0)
+var cam_dist := 1900.0
 var cam_target := Vector3(0, 0, 0)
 var camera: Camera3D
 var dragging := false
@@ -94,30 +95,45 @@ func _setup_environment() -> void:
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color("6fa8dc")
-	sky_mat.sky_horizon_color = Color("cfe3f5")
-	sky_mat.ground_bottom_color = Color("4a6b3a")
-	sky_mat.ground_horizon_color = Color("9fbf8a")
-	sky.sky_material = sky_mat
+	if ResourceLoader.exists("res://assets/textures/skybox_panorama.png"):
+		var pano := PanoramaSkyMaterial.new()
+		pano.panorama = load("res://assets/textures/skybox_panorama.png")
+		sky.sky_material = pano
+	else:
+		var sky_mat := ProceduralSkyMaterial.new()
+		sky_mat.sky_top_color = Color("4a5a8a")
+		sky_mat.sky_horizon_color = Color("c8d4e6")
+		sky_mat.ground_bottom_color = Color("2f3f26")
+		sky_mat.ground_horizon_color = Color("7d9368")
+		sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 1.05
+	env.ambient_light_energy = 0.2
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.fog_enabled = false
+	env.tonemap_exposure = 0.75
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.3
+	env.adjustment_contrast = 1.12
+	env.fog_enabled = true
+	env.fog_light_color = Color("b8c6d4")
+	env.fog_density = 0.00008
+	env.fog_sky_affect = 0.0
 	we.environment = env
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52, -38, 0)
-	sun.light_energy = 1.2
-	sun.shadow_enabled = false
+	sun.rotation_degrees = Vector3(-48, -38, 0)
+	sun.light_energy = 1.0
+	sun.light_color = Color("fff2dd")
+	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 2200.0
 	add_child(sun)
 
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-25, 140, 0)
-	fill.light_energy = 0.35
+	fill.light_energy = 0.12
+	fill.light_color = Color("bcd2ff")
 	add_child(fill)
 
 
@@ -336,6 +352,48 @@ func _legal_moves(dice: int) -> Array:
 	return out
 
 
+func _is_ai(team: int) -> bool:
+	return team in AI_TEAMS
+
+
+func _team_display(team: int) -> String:
+	return TEAM_NAMES[team] + ("（AI）" if _is_ai(team) else "")
+
+
+# AI 走子评分：能吃就吃 > 能到终点 > 推进更远的棋子 > 优先出基地
+func _ai_choose(legal: Array, dice: int) -> int:
+	var best: int = legal[0]
+	var best_score := -1.0e9
+	for i in legal:
+		var p: Dictionary = pieces[i]
+		var start: int = p["cell"]
+		var target := 0 if start < 0 else start + dice
+		var score := float(target)
+		if start < 0:
+			score += 30.0
+		if target == FIELDS - 1:
+			score += 400.0
+		var tn := _path_point(p["team"], target)
+		for q in pieces:
+			if q["team"] == p["team"] or q["finished"] or q["cell"] < 0:
+				continue
+			if _path_point(q["team"], q["cell"]) == tn:
+				score += 1000.0
+		if score > best_score:
+			best_score = score
+			best = i
+	return best
+
+
+func _maybe_ai_turn() -> void:
+	if game_over or busy or not _is_ai(current_team):
+		return
+	await get_tree().create_timer(0.7).timeout
+	if game_over or busy or not _is_ai(current_team):
+		return
+	await _do_roll()
+
+
 func _on_roll_pressed() -> void:
 	if busy or game_over or awaiting_pick:
 		return
@@ -348,7 +406,7 @@ func _do_roll() -> void:
 	dice_label.text = "点数  %d" % dice
 	if dice_player and dice_player.stream:
 		dice_player.play()
-	_log("%s 掷出 %d 点" % [TEAM_NAMES[current_team], dice])
+	_log("%s 掷出 %d 点" % [_team_display(current_team), dice])
 	_update_hud()
 	var legal := _legal_moves(dice)
 	await get_tree().create_timer(0.35).timeout
@@ -359,6 +417,11 @@ func _do_roll() -> void:
 		return
 	if legal.size() == 1:
 		await _move_piece(legal[0], dice)
+		return
+	if _is_ai(current_team):
+		var choice := _ai_choose(legal, dice)
+		await get_tree().create_timer(0.45).timeout
+		await _move_piece(choice, dice)
 		return
 	if auto_mode:
 		await get_tree().create_timer(0.2).timeout
@@ -469,10 +532,11 @@ func _finish_turn(extra: bool) -> void:
 		_update_hud()
 		return
 	if extra:
-		_log("%s 掷出 6 点，再掷一次" % TEAM_NAMES[current_team])
+		_log("%s 掷出 6 点，再掷一次" % _team_display(current_team))
 	else:
 		current_team = (current_team + 1) % 4
 	_update_hud()
+	_maybe_ai_turn()
 
 
 # ---------------------------------------------------------------- UI
@@ -505,7 +569,7 @@ func _build_ui() -> void:
 	title.add_theme_font_size_override("font_size", 26)
 	vb.add_child(title)
 	var sub := Label.new()
-	sub.text = "经典布局 · 经典模式 · 4 人本地"
+	sub.text = "经典布局 · 经典模式 · 1 人对战 3 AI"
 	sub.add_theme_font_size_override("font_size", 14)
 	sub.modulate = Color(1, 1, 1, 0.7)
 	vb.add_child(sub)
@@ -599,9 +663,9 @@ func _update_hud() -> void:
 		turn_label.text = "%s 获胜！" % TEAM_NAMES[winner]
 		turn_label.modulate = TEAM_COLORS[winner] if winner >= 0 else Color.WHITE
 	else:
-		turn_label.text = "当前回合：%s" % TEAM_NAMES[current_team]
+		turn_label.text = "当前回合：%s" % _team_display(current_team)
 		turn_label.modulate = TEAM_COLORS[current_team]
-	roll_button.disabled = busy or game_over or awaiting_pick
+	roll_button.disabled = busy or game_over or awaiting_pick or _is_ai(current_team)
 
 
 func _log(text: String) -> void:
