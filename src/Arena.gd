@@ -37,15 +37,15 @@ const THEMES := {
 	},
 	"frost": {
 		"sky": "res://assets/textures/sky_frost.png", "sky_energy": 0.95,
-		"ambient": 0.46, "exposure": 1.0, "saturation": 0.96, "glow": 0.72,
-		"sun_color": "e6f4ff", "sun_energy": 2.2, "sun_rot": Vector3(-48, -20, 0),
+		"ambient": 0.30, "exposure": 0.86, "saturation": 1.02, "glow": 0.55,
+		"sun_color": "e6f4ff", "sun_energy": 1.6, "sun_rot": Vector3(-48, -20, 0),
 		"fill_color": "7fb0ff", "fill_energy": 0.40,
 		"fog_color": "cfe6ff", "fog_energy": 0.5, "fog_density": 0.00009,
 		"center_color": "bfe6ff", "center_energy": 1.7,
-		"stone_a": "d6e4f2", "stone_b": "c2d4e6", "stone_dark": "7f93aa", "deck": "8fa3b8",
+		"stone_a": "a9c0d8", "stone_b": "93aecb", "stone_dark": "5d7288", "deck": "6a7f96",
 		"tint_a": 0.94, "tint_b": 0.94, "tint_dark": 0.78, "tint_deck": 0.62,
 		"gold": "d8ecff", "gold_em": "4fa8dc",
-		"chevron": "8fb6c9", "chevron_em": "9fe4ff",
+		"chevron": "6f93a8", "chevron_em": "6fd4ff",
 		"trim": "aef0ff", "motes": "e8f8ff",
 	},
 	"ember": {
@@ -337,16 +337,16 @@ func _make_materials() -> void:
 	_trim.emission = Color(th["trim"])
 	_trim.emission_energy_multiplier = 1.8
 
-	_chevron = _pbr(Color(th["chevron"]), 0.55, 0.38)
+	_chevron = _pbr(Color(th["chevron"]).darkened(0.3), 0.5, 0.42)
 	_chevron.emission_enabled = true
 	_chevron.emission = Color(th["chevron_em"])
-	_chevron.emission_energy_multiplier = 0.5
+	_chevron.emission_energy_multiplier = 0.95
 
 	for c in team_colors:
-		var m := _pbr(Color(c).darkened(0.12), 0.78, 0.26)
+		var m := _pbr(Color(c).darkened(0.04), 0.34, 0.34)
 		m.emission_enabled = true
 		m.emission = c
-		m.emission_energy_multiplier = 0.16
+		m.emission_energy_multiplier = 0.14
 		m.rim_enabled = true
 		m.rim = 0.5
 		_team_metal.append(m)

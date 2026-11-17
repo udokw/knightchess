@@ -144,6 +144,8 @@ func _ready() -> void:
 		# 截图调试：--menuopen 展开左上角控制台
 		if all_args.has("--menuopen"):
 			hud._toggle_menu()
+		if all_args.has("--logopen"):
+			hud._toggle_log()
 		await _take_screenshot()
 
 
