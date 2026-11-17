@@ -20,9 +20,9 @@ const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
 const DIM := Color("98a3b8")
 
-const THEME_IDS := ["dusk", "frost", "ember", "jade", "void"]
-const THEME_NAMES := ["暮色竞技场", "霜封荒原", "熔火深渊", "翠玉遗迹", "虚空星海"]
-const THEME_SHORT := ["暮色", "霜封", "熔火", "翠玉", "虚空"]
+const THEME_IDS := ["cozy", "dusk", "frost", "ember", "jade", "void"]
+const THEME_NAMES := ["晴日草地", "暮色竞技场", "霜封荒原", "熔火深渊", "翠玉遗迹", "虚空星海"]
+const THEME_SHORT := ["晴日", "暮色", "霜封", "熔火", "翠玉", "虚空"]
 
 const ITEM_INFO := {
 	"boost": ["加速", "+2 点数", Color("ff9a3c")],
@@ -522,13 +522,13 @@ func _build_pick() -> void:
 	_pick_panel = PanelContainer.new()
 	_pick_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.92), 16, GOLD, 2))
 	_pick_panel.anchor_left = 0.0
-	_pick_panel.anchor_top = 0.5
-	_pick_panel.anchor_bottom = 0.5
+	_pick_panel.anchor_top = 1.0
+	_pick_panel.anchor_bottom = 1.0
 	_pick_panel.offset_left = 18.0 + _safe.x
 	_pick_panel.offset_right = 250.0 + _safe.x
-	_pick_panel.offset_top = -120.0
-	_pick_panel.offset_bottom = 120.0
-	_pick_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_pick_panel.offset_top = -206.0
+	_pick_panel.offset_bottom = -46.0
+	_pick_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_pick_panel.custom_minimum_size = Vector2(232, 0)
 	_pick_panel.visible = false
 	_root.add_child(_pick_panel)

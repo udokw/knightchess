@@ -14,6 +14,8 @@ run/max_fps=30
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/stretch/mode="canvas_items"
+; 窗口拉大时直接扩展画布，而不是把 1280x720 拉伸放大（否则整体发虚）
+window/stretch/aspect="expand"
 window/handheld/orientation=0
 
 [gui]

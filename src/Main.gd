@@ -43,7 +43,7 @@ const ITEM_POOL := [
 ]
 const THEME_ITEM := {
 	"dusk": "moonstep", "frost": "frostlock", "ember": "inferno",
-	"jade": "jadeguard", "void": "voidstep",
+	"jade": "jadeguard", "void": "voidstep", "cozy": "gale",
 }
 
 const EVENT_TITLES := {
@@ -75,11 +75,11 @@ const EVENT_POOL := [
 ## 每个主题额外加入的独占事件
 const THEME_EVENT := {
 	"dusk": "starlight", "frost": "blizzard", "ember": "eruption",
-	"jade": "jadeserpent", "void": "voidrift",
+	"jade": "jadeserpent", "void": "voidrift", "cozy": "goldrain",
 }
 const THEME_LABELS := {
 	"dusk": "暮色竞技场", "frost": "霜封荒原", "ember": "熔火深渊",
-	"jade": "翠玉遗迹", "void": "虚空星海",
+	"jade": "翠玉遗迹", "void": "虚空星海", "cozy": "晴日草地",
 }
 
 var base_points: Dictionary = {}
@@ -155,8 +155,14 @@ var _amb_streams: Dictionary = {}
 
 
 func _ready() -> void:
+	var mobile := OS.has_feature("mobile")
 	# 移动端省电：锁 30 帧，配合关闭实时阴影与减半粒子，长时间对局也不烫手
-	Engine.max_fps = 30
+	Engine.max_fps = 30 if mobile else 60
+	# PC 端直接跑满画质：渲染比例 1.0 + 2x MSAA。移动端仍保留 0.85、不开 MSAA
+	if not mobile:
+		var vp := get_viewport()
+		vp.scaling_3d_scale = 1.0
+		vp.msaa_3d = Viewport.MSAA_2X
 	var all_args: Array = []
 	all_args.append_array(OS.get_cmdline_args())
 	all_args.append_array(OS.get_cmdline_user_args())
@@ -236,19 +242,33 @@ func _apply_board_size(n: int) -> void:
 	var grow := float(n) / float(BASE_FIELDS)
 	pts = {}
 	# 环道：正圆均匀分布（参照原作），半径随格数增大，格子间距恒定
-	var ring_r := 572.0 * grow
+	var ring_r := 940.0 * grow
 	var a0 := deg_to_rad(-168.7)
 	for k in n:
 		var ang := a0 + TAU * float(k) / float(n)
 		pts["BS%02d" % k] = [cos(ang) * ring_r, 1.0, sin(ang) * ring_r]
-	# 终点跑道：从中心指向环内侧，略延伸以贴近环道
+	# 终点跑道：从中心指向环内侧，始终贴到新的环道上
 	for k in base_points.keys():
 		var key := String(k)
-		if not key.begins_with("GL") and not key.begins_with("HM"):
+		if not key.begins_with("GL"):
 			continue
 		var bp: Array = base_points[key]
-		var f := grow * (1.25 if key.begins_with("GL") else 1.35)
-		pts[key] = [float(bp[0]) * f, float(bp[1]), float(bp[2]) * f]
+		var fg := grow * 2.04
+		pts[key] = [float(bp[0]) * fg, float(bp[1]), float(bp[2]) * fg]
+	# 四角基地：两行 1+3 的紧凑弧形。前排那颗正对各队起始格的方位，
+	# 后排三颗沿环等弧距排开，整块基地贴着环道外沿
+	var front_r := ring_r + 118.0
+	var back_r := ring_r + 228.0
+	for t in 4:
+		var ba: float = a0 + TAU * float(t) / 4.0
+		var bd := Vector3(cos(ba), 0.0, sin(ba))
+		var bt := Vector3(-bd.z, 0.0, bd.x)
+		var front := bd * front_r
+		pts["HM%d_1" % (t + 1)] = [front.x, 1.0, front.z]
+		for i in 3:
+			var off := (float(i) - 1.0) * 0.108
+			var back := bd * back_r + bt * (sin(off) * back_r)
+			pts["HM%d_%d" % [t + 1, i + 2]] = [back.x, 1.0, back.z]
 	paths = []
 	var step := n / 4
 	for t in 4:
@@ -310,10 +330,10 @@ func _setup_camera() -> void:
 ## 相机默认取景：棋盘越大，竞技台在屏幕上越大（52 格会略微超出画面，可双指缩放/拖动）
 func _fit_camera() -> void:
 	cam_yaw = deg_to_rad(34.0)
-	cam_pitch = deg_to_rad(52.0)
-	# 棋盘越大，镜头略微拉远，保证四角基地基本在视野内
+	cam_pitch = deg_to_rad(48.0)
+	# 棋盘越大，镜头略微拉远，保证四角基地与外围景物都在视野内
 	var grow := float(FIELDS) / float(BASE_FIELDS)
-	cam_dist = 2860.0 * (1.0 + 0.58 * (grow - 1.0))
+	cam_dist = 3700.0 * (1.0 + 0.58 * (grow - 1.0))
 	cam_target = Vector3(0, 40.0, 0)
 	_update_camera()
 

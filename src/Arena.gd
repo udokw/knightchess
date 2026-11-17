@@ -14,6 +14,8 @@ const SAT_SCALE := 0.92
 const CONTRAST := 1.16
 const TILE_TOP := 8.0
 const DECK_HALF := 890.0
+## 自然场景的地面高度：广场像真实村落广场一样贴着地面，而不是悬空的台子
+const SCENE_GROUND := -70.0
 const DICE_HOME_BASE := Vector3(0, 300, 0)
 const DICE_LAND := Vector3(0, 216, 0)
 
@@ -93,6 +95,31 @@ const THEMES := {
 		"chevron": "6a5a9a", "chevron_em": "b8a0ff",
 		"trim": "c8b8ff", "motes": "e0d8ff",
 	},
+	# 晴日草地：程序化晴空 + 暖砂台面，零泛光，主打松弛清晰的休闲感
+	"cozy": {
+		"sky": "", "sky_energy": 1.0,
+		"sky_top": "B7DDEE", "sky_horizon": "FDF4E2",
+		"ground_horizon": "EEF4DF", "ground_bottom": "CFE3C0",
+		"ambient": 0.18, "exposure": 0.72, "saturation": 1.12, "glow": 0.0, "contrast": 1.24,
+		"sun_color": "fff3da", "sun_energy": 1.18, "sun_rot": Vector3(-54, -32, 0),
+		"fill_color": "d2e6f4", "fill_energy": 0.18,
+		"fog_color": "e6f1e2", "fog_energy": 0.0, "fog_density": 0.0,
+		"center_color": "ffe6b4", "center_energy": 0.6,
+		"stone_a": "C3A87C", "stone_b": "B79C6E", "stone_dark": "8E744E", "deck": "BFA270",
+		"deck_gain": 0.86,
+		"tint_a": 0.84, "tint_b": 0.84, "tint_dark": 0.80, "tint_deck": 0.86,
+		"gold": "B08748", "gold_em": "3A2C14",
+		"chevron": "B99E74", "chevron_em": "4E3F26",
+		"trim": "F2E0BA", "motes": "FFF6E2",
+		"ground": "6A9446",
+		# 环道踏步石比广场更浅，像被踩得发白的旧石板，路径一眼可读
+		"path_a": "DFD2B4", "path_b": "CDBF9E",
+		# 自然场景色板：夯土 / 木料 / 树叶 / 水面 / 远景山丘
+		"nature": true,
+		"soil": "A87F50", "wood": "6E4E32",
+		"leaf_a": "3F7A30", "leaf_b": "33652A", "leaf_c": "5C9340",
+		"water": "6FB6C8", "hill": "7FA85F",
+	},
 }
 
 var team_colors: Array = []
@@ -123,9 +150,23 @@ var _chevron: StandardMaterial3D
 var _team_metal: Array = []
 var _team_glow: Array = []
 var _team_soft: Array = []
+# 自然场景材质：夯土 / 木料 / 树叶 / 水面
+var _soil: StandardMaterial3D
+var _wood: StandardMaterial3D
+var _leaf_a: StandardMaterial3D
+var _leaf_b: StandardMaterial3D
+var _leaf_c: StandardMaterial3D
+var _water: StandardMaterial3D
+# 环道踏步石：比广场浅一档，让"路"从广场里浮出来
+var _path_a: StandardMaterial3D
+var _path_b: StandardMaterial3D
+var _scenery: Node3D
+var _camp_fires: Array = []
 var _noise_tex: NoiseTexture2D
-var _stone_alb: Texture2D
+## 由原石纹提亮而来的浅色细节贴图：能直接当反照率用，又不会把广场压成黑片
+var _stone_light: Texture2D
 var _stone_rgh: Texture2D
+var _shadow_tex: Texture2D
 var _pawn_mesh: ArrayMesh
 
 var _dice: Node3D
@@ -137,6 +178,9 @@ var _time := 0.0
 var _rolling := false
 var _dice_locked := false
 var _dice_home := DICE_HOME_BASE
+## 投掷拖影：骰子飞行时留下的一串渐淡光点
+var _dice_trail: Array = []
+var _dice_trail_pts: Array = []
 var _tile_size := TILE_SIZE
 var _board_scale := 1.0
 
@@ -166,16 +210,18 @@ func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk",
 	theme_id = theme if THEMES.has(theme) else "dusk"
 	_tile_size = tile_size
 	_board_scale = board_scale
-	# 骰子停在台面靠镜头一侧的边缘外，避免遮挡棋盘中心
-	_dice_home = Vector3(0, 300.0, (DECK_HALF + 70.0) * board_scale)
+	# 骰子悬浮在棋盘正中央上空，慢慢自转，镜头一眼就能读到点数
+	_dice_home = Vector3(0.0, 400.0, 0.0)
 	# 棋盘不再整体缩放：格数越多，坐标外扩越大，格子世界尺寸恒定，画面更清晰不拥挤
 	_build_environment()
+	_build_ground()
 	_make_materials()
 	_build_platform()
 	_build_track(points, ring)
 	_build_goal_lanes(points)
 	_build_bases(points)
 	_build_center()
+	_build_scenery()
 	_build_motes()
 	_build_theme_fx()
 	_build_dice()
@@ -201,7 +247,10 @@ func _process(delta: float) -> void:
 	if _dice and not _rolling:
 		_dice.position.y = _dice_home.y + sin(_time * 1.6) * 5.0
 		_dice.rotation.y += delta * 0.55
-		_dice.rotation.x = sin(_time * 0.9) * 0.16
+		# 斜着摆：同时看到三个面，远看才像个立方体而不是一张白卡片
+		_dice.rotation.x = 0.40 + sin(_time * 0.9) * 0.08
+		_dice.rotation.z = 0.22
+	_update_dice_trail()
 
 	# 事件宝箱：悬浮 + 自转 + 光柱呼吸
 	for i in _chests.size():
@@ -283,6 +332,13 @@ func _process(delta: float) -> void:
 		if is_instance_valid(flag):
 			flag.rotation.z = sin(_time * 2.4 + float(t)) * (0.16 if active else 0.05)
 
+	# 营地篝火：火苗上下跳动
+	for i in _camp_fires.size():
+		var fl: MeshInstance3D = _camp_fires[i]
+		if is_instance_valid(fl):
+			var fs: float = 1.0 + sin(_time * 8.6 + float(i) * 1.7) * 0.17
+			fl.scale = Vector3(1.0 + sin(_time * 6.2 + float(i)) * 0.06, fs, 1.0 + cos(_time * 7.1 + float(i)) * 0.06)
+
 	for fx in _movable_fx:
 		if is_instance_valid(fx):
 			fx.position.y = 172.0 + sin(_time * 5.0) * 9.0
@@ -303,24 +359,44 @@ func _process(delta: float) -> void:
 
 # ---------------------------------------------------------------- 环境与材质
 
+## 草地地面：把悬浮石台放回"真实场地"里，背景不再是空灰
+func _build_ground() -> void:
+	var gc: String = String(THEMES[theme_id].get("ground", ""))
+	if gc == "":
+		return
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(9000.0, 9000.0)
+	var mi := MeshInstance3D.new()
+	mi.name = "Ground"
+	mi.mesh = pm
+	mi.position = Vector3(0, SCENE_GROUND, 0)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(gc)
+	m.roughness = 1.0
+	m.metallic = 0.0
+	mi.material_override = m
+	add_child(mi)
+
+
 func _build_environment() -> void:
 	var th: Dictionary = THEMES[theme_id]
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
 	var sky := Sky.new()
 	var sky_path: String = th["sky"]
-	if ResourceLoader.exists(sky_path):
+	if sky_path != "" and ResourceLoader.exists(sky_path):
 		var pano := PanoramaSkyMaterial.new()
 		pano.panorama = load(sky_path)
 		pano.energy_multiplier = th["sky_energy"]
 		sky.sky_material = pano
 	else:
+		# 程序化晴空：不用贴图也能得到干净通透的日光天空
 		var ps := ProceduralSkyMaterial.new()
-		ps.sky_top_color = Color("0b1026")
-		ps.sky_horizon_color = Color("ffa06a")
-		ps.sky_curve = 0.12
-		ps.ground_bottom_color = Color("1a2036")
-		ps.ground_horizon_color = Color("c98a72")
+		ps.sky_top_color = Color(th.get("sky_top", "0b1026"))
+		ps.sky_horizon_color = Color(th.get("sky_horizon", "ffa06a"))
+		ps.sky_curve = 0.16
+		ps.ground_bottom_color = Color(th.get("ground_bottom", "1a2036"))
+		ps.ground_horizon_color = Color(th.get("ground_horizon", "c98a72"))
 		sky.sky_material = ps
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
@@ -340,7 +416,7 @@ func _build_environment() -> void:
 	env.set("glow_levels/4", 0.25)
 	env.adjustment_enabled = true
 	env.adjustment_saturation = float(th["saturation"]) * SAT_SCALE
-	env.adjustment_contrast = CONTRAST
+	env.adjustment_contrast = float(th.get("contrast", CONTRAST))
 	env.ssao_enabled = false
 	env.ssil_enabled = false
 	env.sdfgi_enabled = false
@@ -359,9 +435,13 @@ func _build_environment() -> void:
 	sun.rotation_degrees = th["sun_rot"]
 	sun.light_energy = th["sun_energy"]
 	sun.light_color = Color(th["sun_color"])
-	# 移动端发热优化：关闭实时阴影（场景本身靠辉光与自发光出层次）
-	sun.shadow_enabled = false
-	sun.directional_shadow_max_distance = 2400.0
+	# 开启柔和日光投影：让棋子真正"落在"棋盘上，层次立刻立起来
+	sun.shadow_enabled = true
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	# 阴影距离按相机到广场的距离算：镜头在 3700 外，原来 2200 会把整盘阴影全裁掉
+	sun.directional_shadow_max_distance = 6500.0
+	sun.shadow_blur = 1.6
+	sun.shadow_bias = 0.08
 	add_child(sun)
 	_sun = sun
 
@@ -394,23 +474,37 @@ func _make_materials() -> void:
 	_noise_tex.as_normal_map = true
 	_noise_tex.bump_strength = 3.0
 
-	if ResourceLoader.exists("res://assets/textures/stone_albedo.png"):
-		_stone_alb = load("res://assets/textures/stone_albedo.png")
+	# 接地软阴影贴图：径向渐变的暗斑，棋子/骰子垫在下面才有"压在地上"的重量感
+	var st := GradientTexture2D.new()
+	st.fill = GradientTexture2D.FILL_RADIAL
+	st.fill_from = Vector2(0.5, 0.5)
+	st.fill_to = Vector2(1.0, 0.5)
+	st.width = 128
+	st.height = 128
+	var sg := Gradient.new()
+	sg.offsets = PackedFloat32Array([0.0, 0.58, 1.0])
+	sg.colors = PackedColorArray([
+		Color(0, 0, 0, 0.44), Color(0, 0, 0, 0.26), Color(0, 0, 0, 0.0)])
+	st.gradient = sg
+	_shadow_tex = st
+
+	if ResourceLoader.exists("res://assets/textures/stone_light.png"):
+		_stone_light = load("res://assets/textures/stone_light.png")
 	if ResourceLoader.exists("res://assets/textures/stone_rough.png"):
 		_stone_rgh = load("res://assets/textures/stone_rough.png")
 
 	var th: Dictionary = THEMES[theme_id]
 	_stone_a = _pbr(Color(th["stone_a"]), 0.22, 0.62)
-	_recolor_stone(_stone_a, Color(th["stone_a"]), float(th["tint_a"]), 0.0014, 0.22, 0.62)
+	_recolor_stone(_stone_a, Color(th["stone_a"]), float(th["tint_a"]), 0.0075, 0.22, 0.62)
 
 	_stone_b = _pbr(Color(th["stone_b"]), 0.22, 0.56)
-	_recolor_stone(_stone_b, Color(th["stone_b"]), float(th["tint_b"]), 0.0014, 0.22, 0.56)
+	_recolor_stone(_stone_b, Color(th["stone_b"]), float(th["tint_b"]), 0.0075, 0.22, 0.56)
 
 	_stone_dark = _pbr(Color(th["stone_dark"]), 0.3, 0.5)
-	_recolor_stone(_stone_dark, Color(th["stone_dark"]), float(th["tint_dark"]), 0.0011, 0.3, 0.5)
+	_recolor_stone(_stone_dark, Color(th["stone_dark"]), float(th["tint_dark"]), 0.0065, 0.3, 0.5)
 
 	_deck_top = _pbr(Color(th["deck"]), 0.26, 0.58)
-	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * 1.28, 0.0009, 0.26, 0.58)
+	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * float(th.get("deck_gain", 1.28)), 0.0060, 0.26, 0.58)
 
 	_gold = _pbr(Color(th["gold"]), 0.72, 0.3)
 	_gold.emission_enabled = true
@@ -428,6 +522,25 @@ func _make_materials() -> void:
 	_chevron.emission_enabled = true
 	_chevron.emission = Color(th["chevron_em"])
 	_chevron.emission_energy_multiplier = 0.5
+
+	# 自然场景材质：没有自然色板的主题退化为石材色，保持各处可运行
+	_soil = _pbr(Color(th.get("soil", th["stone_dark"])), 0.0, 0.95)
+	_wood = _pbr(Color(th.get("wood", th["stone_dark"])), 0.0, 0.8)
+	_leaf_a = _pbr(Color(th.get("leaf_a", th["stone_b"])), 0.0, 0.86)
+	_leaf_b = _pbr(Color(th.get("leaf_b", th["stone_a"])), 0.0, 0.86)
+	_leaf_c = _pbr(Color(th.get("leaf_c", th["stone_a"])), 0.0, 0.86)
+	_water = _pbr(Color(th.get("water", th["trim"])), 0.0, 0.34)
+	_water.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var wc := Color(th.get("water", th["trim"]))
+	_water.albedo_color = Color(wc.r, wc.g, wc.b, 0.86)
+	_water.emission_enabled = true
+	_water.emission = wc
+	_water.emission_energy_multiplier = 0.10
+	_path_a = _pbr(Color(th.get("path_a", th["stone_a"])), 0.16, 0.58)
+	_path_b = _pbr(Color(th.get("path_b", th["stone_b"])), 0.16, 0.54)
+	# 踏步石铺一层石纹，环道不再是纯色塑料片
+	_add_stone_detail(_path_a, 0.013, true)
+	_add_stone_detail(_path_b, 0.012, true)
 
 	for c in team_colors:
 		var m := _pbr(Color(c).darkened(0.04), 0.34, 0.34)
@@ -450,7 +563,7 @@ func _make_materials() -> void:
 		s.emission_energy_multiplier = 0.16
 		s.rim_enabled = true
 		s.rim = 0.35
-		_apply_stone(s, 1.0, 0.0012)
+		_apply_stone(s, 1.0, 0.0024)
 		_team_soft.append(s)
 
 
@@ -465,14 +578,19 @@ func _pbr(albedo: Color, metallic: float, roughness: float) -> StandardMaterial3
 
 func _apply_stone(m: StandardMaterial3D, tint: float, tri: float) -> void:
 	m.albedo_color = Color(m.albedo_color.r * tint, m.albedo_color.g * tint, m.albedo_color.b * tint)
-	if _stone_alb:
-		m.albedo_texture = _stone_alb
+	_add_stone_detail(m, tri, true)
+
+
+## 只叠加石纹的粗糙度与法线，保留材质本身的浅色反照率
+func _add_stone_detail(m: StandardMaterial3D, tri: float, albedo := false) -> void:
+	if albedo and _stone_light:
+		m.albedo_texture = _stone_light
 	if _stone_rgh:
 		m.roughness_texture = _stone_rgh
 		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	m.normal_enabled = true
 	m.normal_texture = _noise_tex
-	m.normal_scale = 0.35
+	m.normal_scale = 0.55
 	m.uv1_triplanar = true
 	m.uv1_scale = Vector3(tri, tri, tri)
 
@@ -485,14 +603,15 @@ func _recolor_stone(m: StandardMaterial3D, base: Color, tint: float, tri: float,
 	m.albedo_color = Color(base.r * t, base.g * t, base.b * t)
 	m.metallic = metallic
 	m.roughness = rough
-	# 不再叠加偏暗的石纹贴图（否则台面发黑），保留法线/粗糙度贴图提供质感
-	m.albedo_texture = null
+	# 用提亮过的石纹做反照率：既保留石板斑驳的天然质感，又不会把台面压暗
+	m.albedo_texture = _stone_light
 	if _stone_rgh:
 		m.roughness_texture = _stone_rgh
 		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	m.normal_enabled = true
 	m.normal_texture = _noise_tex
-	m.normal_scale = 0.35
+	# 法线强度提高一档：广场石缝和颗粒在斜视角下也读得出来，不再是平板一块
+	m.normal_scale = 0.55
 	m.uv1_triplanar = true
 	m.uv1_scale = Vector3(tri, tri, tri)
 
@@ -514,11 +633,20 @@ func set_theme(id: String) -> void:
 		_env.fog_light_energy = float(th["fog_energy"]) * FOG_SCALE
 		_env.fog_density = float(th["fog_density"]) * FOG_SCALE
 		var sky_path: String = th["sky"]
-		if ResourceLoader.exists(sky_path) and _env.sky:
-			var pano := PanoramaSkyMaterial.new()
-			pano.panorama = load(sky_path)
-			pano.energy_multiplier = th["sky_energy"]
-			_env.sky.sky_material = pano
+		if _env.sky:
+			if sky_path != "" and ResourceLoader.exists(sky_path):
+				var pano := PanoramaSkyMaterial.new()
+				pano.panorama = load(sky_path)
+				pano.energy_multiplier = th["sky_energy"]
+				_env.sky.sky_material = pano
+			else:
+				var ps := ProceduralSkyMaterial.new()
+				ps.sky_top_color = Color(th.get("sky_top", "0b1026"))
+				ps.sky_horizon_color = Color(th.get("sky_horizon", "ffa06a"))
+				ps.sky_curve = 0.16
+				ps.ground_bottom_color = Color(th.get("ground_bottom", "1a2036"))
+				ps.ground_horizon_color = Color(th.get("ground_horizon", "c98a72"))
+				_env.sky.sky_material = ps
 	if _sun:
 		_sun.light_energy = th["sun_energy"]
 		_sun.light_color = Color(th["sun_color"])
@@ -533,7 +661,7 @@ func set_theme(id: String) -> void:
 	_recolor_stone(_stone_a, Color(th["stone_a"]), float(th["tint_a"]), 0.0014, 0.22, 0.62)
 	_recolor_stone(_stone_b, Color(th["stone_b"]), float(th["tint_b"]), 0.0014, 0.22, 0.56)
 	_recolor_stone(_stone_dark, Color(th["stone_dark"]), float(th["tint_dark"]), 0.0011, 0.3, 0.5)
-	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * 1.28, 0.0009, 0.26, 0.58)
+	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * float(th.get("deck_gain", 1.28)), 0.0009, 0.26, 0.58)
 
 	if _gold:
 		_gold.albedo_color = Color(th["gold"])
@@ -543,6 +671,27 @@ func set_theme(id: String) -> void:
 	if _chevron:
 		_chevron.albedo_color = Color(th["chevron"])
 		_chevron.emission = Color(th["chevron_em"])
+	if _soil:
+		_soil.albedo_color = Color(th.get("soil", th["stone_dark"]))
+	if _wood:
+		_wood.albedo_color = Color(th.get("wood", th["stone_dark"]))
+	if _leaf_a:
+		_leaf_a.albedo_color = Color(th.get("leaf_a", th["stone_b"]))
+	if _leaf_b:
+		_leaf_b.albedo_color = Color(th.get("leaf_b", th["stone_a"]))
+	if _leaf_c:
+		_leaf_c.albedo_color = Color(th.get("leaf_c", th["stone_a"]))
+	if _water:
+		var wc2 := Color(th.get("water", th["trim"]))
+		_water.albedo_color = Color(wc2.r, wc2.g, wc2.b, 0.8)
+		_water.emission = wc2
+	if _path_a:
+		_path_a.albedo_color = Color(th.get("path_a", th["stone_a"]))
+	if _path_b:
+		_path_b.albedo_color = Color(th.get("path_b", th["stone_b"]))
+	# 自然景物只在自然主题下出现，其他主题保持原竞技场观感
+	if _scenery:
+		_scenery.visible = bool(th.get("nature", false))
 	if _motes_mat:
 		_motes_mat.albedo_color = Color(th["motes"])
 		_motes_mat.emission = Color(th["motes"])
@@ -596,6 +745,25 @@ func _add_torus(parent: Node, inner: float, outer: float, pos: Vector3, mat: Mat
 	return mi
 
 
+## 接地软阴影：一层径向渐变的暗斑，棋子/骰子垫在下面才有压在地面上的重量感
+func _add_contact_shadow(parent: Node, radius: float, y := 0.8) -> MeshInstance3D:
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(radius * 2.0, radius * 2.0)
+	var sm := StandardMaterial3D.new()
+	sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sm.albedo_texture = _shadow_tex
+	sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.mesh = pm
+	mi.material_override = sm
+	mi.position = Vector3(0, y, 0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
+
+
 ## 3D 场景里的广告牌文字（宝箱 / 安全格标识）
 func _billboard_label(text: String, color: Color, height_units: float) -> Label3D:
 	var l := Label3D.new()
@@ -625,46 +793,35 @@ func _pt(points: Dictionary, name: String) -> Vector3:
 
 func _build_platform() -> void:
 	var grow := maxf(_board_scale, 0.001)
-	var under := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 1240.0 * grow
-	cm.bottom_radius = 560.0 * grow
-	cm.height = 460.0
-	cm.radial_segments = 4
-	under.mesh = cm
-	under.material_override = _stone_dark
-	under.rotation.y = deg_to_rad(45.0)
-	under.position.y = -260.0
-	add_child(under)
-
-	var deck_half := DECK_HALF * grow
-	var deck := _add_box(self, Vector3(deck_half * 2.0, 34.0, deck_half * 2.0), Vector3(0, -17, 0), _stone_dark)
+	# 村落广场：圆形石铺广场贴着地面铺开。环道 940 是主体，广场只比环道外扩一圈营地
+	var ring_r := 940.0 * grow
+	var r := ring_r + 560.0
+	var edges := 72
+	var skirt_h := -SCENE_GROUND
+	var skirt := _add_cyl(self, r * 0.995, r * 1.10, skirt_h, Vector3(0, SCENE_GROUND * 0.5, 0), _soil, edges)
+	skirt.name = "PlazaSkirt"
+	var deck := _add_cyl(self, r, r * 1.01, 18.0, Vector3(0, -9.0, 0), _stone_b, edges)
 	deck.name = "Deck"
-
-	var top := _add_box(self, Vector3(deck_half * 2.0 - 40.0, 8.0, deck_half * 2.0 - 40.0), Vector3(0, -4, 0), _deck_top)
+	var top := _add_cyl(self, r - 26.0, r - 22.0, 9.0, Vector3(0, -4.2, 0), _deck_top, edges)
 	top.name = "DeckTop"
 
-	var eh := deck_half
-	for i in 4:
-		var size := Vector3(eh * 2.0 - 6.0, 5.0, 10.0)
-		var pos := Vector3.ZERO
-		match i:
-			0:
-				pos = Vector3(0, 1.0, -eh + 8.0)
-			1:
-				pos = Vector3(0, 1.0, eh - 8.0)
-			2:
-				pos = Vector3(-eh + 8.0, 1.0, 0)
-				size = Vector3(10.0, 5.0, eh * 2.0 - 6.0)
-			3:
-				pos = Vector3(eh - 8.0, 1.0, 0)
-				size = Vector3(10.0, 5.0, eh * 2.0 - 6.0)
-		var trim := _add_box(self, size, pos, _gold)
-		trim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 放射状铺石缝：把大石面切成扇形石板，近看才有的手工感
+	for k in 24:
+		var a := TAU * float(k) / 24.0 + PI * 0.1
+		var plen := r - 34.0
+		var seam := _add_box(self, Vector3(plen, 1.6, 5.0), Vector3(cos(a) * plen * 0.5, 0.4, sin(a) * plen * 0.5), _stone_dark, -a)
+		seam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 同心石缝：一圈圈石板接缝，把广场铺成规整的环形铺装
+	var seam_r := 190.0
+	while seam_r < r - 46.0:
+		var gro := _add_torus(self, seam_r - 2.6, seam_r + 2.6, Vector3(0, 0.5, 0), _stone_dark)
+		gro.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		seam_r += 190.0
 
-	# 台面内圈的一圈暗刻线
-	var ring := _add_torus(self, 690.0 * grow, 700.0 * grow, Vector3(0, 1.5, 0), _gold)
-	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 广场外沿的矮石缘
+	var kerb := _add_torus(self, r - 12.0, r + 10.0, Vector3(0, 2.0, 0), _stone_dark)
+	kerb.name = "Kerb"
+	kerb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _build_track(points: Dictionary, ring: Array) -> void:
@@ -698,23 +855,16 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 
 		var team := i / step
 		var is_start := i % step == 0
-		var base_mat := _stone_b if i % 2 == 0 else _stone_a
-		var slab := _add_box(tile, Vector3(ts - 8.0, TILE_TOP, ts - 8.0), Vector3(0, -TILE_TOP * 0.5, 0), base_mat)
-		slab.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-
-		# 金色凸框：让每一格从台面上清晰地"切"出来
-		var fw := maxf(4.5, ts * 0.045)
-		var edge := (ts - fw) * 0.5
-		var rim_far := _add_box(tile, Vector3(ts, 2.6, fw), Vector3(0, -0.4, edge), _gold)
-		var rim_near := _add_box(tile, Vector3(ts, 2.6, fw), Vector3(0, -0.4, -edge), _gold)
-		var rim_left := _add_box(tile, Vector3(fw, 2.6, ts - fw * 2.0), Vector3(-edge, -0.4, 0), _gold)
-		var rim_right := _add_box(tile, Vector3(fw, 2.6, ts - fw * 2.0), Vector3(edge, -0.4, 0), _gold)
-		for r in [rim_far, rim_near, rim_left, rim_right]:
-			var rmi: MeshInstance3D = r
-			rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-		# 缝隙下的暗色底
-		_add_box(tile, Vector3(ts, 4.0, ts), Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 0.0).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var base_mat := _path_b if i % 2 == 0 else _path_a
+		# 踏步石：等距圆形石板，像村落广场上一圈手工铺的石墩
+		var wob := 1.0 + sin(float(i) * 2.31) * 0.035
+		var sr := ts * 0.455 * wob
+		var stone := _add_cyl(tile, sr, sr * 1.05, TILE_TOP, Vector3(0, -TILE_TOP * 0.5, 0), base_mat, 22)
+		stone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		stone.scale = Vector3(1.0, 1.0, 1.0 + cos(float(i) * 1.7) * 0.05)
+		# 接缝：石板下压一层暗色薄盘，踏石之间形成自然缝隙阴影
+		var gap := _add_cyl(tile, sr * 1.09, sr * 1.09, 4.0, Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 22)
+		gap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 方向箭头（尖端指向行进方向）
 		var local_yaw := wrapf(yaw_next - yaw_avg, -PI, PI)
@@ -739,8 +889,8 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 			_make_item_pad(tile)
 
 		if is_start and team >= 0 and team < _team_glow.size():
-			_add_box(tile, Vector3(ts - 22.0, 2.0, ts - 22.0), Vector3(0, 0.4, 0), _team_soft[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var halo := _add_torus(tile, ts * 0.34, ts * 0.38, Vector3(0, 1.0, 0), _team_glow[team])
+			_add_cyl(tile, ts * 0.40, ts * 0.40, 2.0, Vector3(0, 0.6, 0), _team_soft[team], 20).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var halo := _add_torus(tile, ts * 0.34, ts * 0.38, Vector3(0, 1.4, 0), _team_glow[team])
 			halo.name = "StartHalo"
 
 
@@ -1052,19 +1202,19 @@ func _build_goal_lanes(points: Dictionary) -> void:
 			pad.position = p
 			pad.rotation.y = yaw
 			add_child(pad)
-			_add_box(pad, Vector3(88, 6, 88), Vector3(0, -3, 0), _stone_b).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-			_add_box(pad, Vector3(74, 2, 74), Vector3(0, 1.2, 0), _team_soft[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_add_torus(pad, 31.0, 34.0, Vector3(0, 2.6, 0), _team_glow[t])
+			_add_cyl(pad, 54.0, 56.0, 8.0, Vector3(0, -4.0, 0), _stone_b, 22).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_add_cyl(pad, 44.0, 45.0, 2.0, Vector3(0, 0.6, 0), _stone_a, 22).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_torus(pad, 37.0, 40.0, Vector3(0, 2.2, 0), _team_glow[t])
 			if s == 3:
-				_add_torus(pad, 26, 31, Vector3(0, 2.4, 0), _gold)
+				_add_torus(pad, 30, 36, Vector3(0, 2.2, 0), _gold)
 
-		# 跑道两侧的发光条
+		# 跑道两沿的黄铜嵌线：像广场上铺出的迎宾石径
 		var lane_mid := (outer + inner) * 0.5
 		var length := d.length() + 80.0
 		for side in [-1, 1]:
 			var sd := float(side)
 			var off: Vector3 = Vector3(cos(yaw), 0, -sin(yaw)) * 56.0 * sd
-			_add_box(self, Vector3(4, 2, length), Vector3(lane_mid.x + off.x, 2.0, lane_mid.z + off.z), _team_glow[t], yaw).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_box(self, Vector3(4, 2.4, length), Vector3(lane_mid.x + off.x, 0.4, lane_mid.z + off.z), _gold, yaw).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 终点门拱：两根立柱 + 横梁 + 队色宝石
 		var arch := Node3D.new()
@@ -1074,9 +1224,9 @@ func _build_goal_lanes(points: Dictionary) -> void:
 		add_child(arch)
 		for side in [-1, 1]:
 			var sd2 := float(side)
-			_add_box(arch, Vector3(16, 118, 16), Vector3(52.0 * sd2, 59.0, 0), _stone_b).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-			_add_box(arch, Vector3(10, 104, 10), Vector3(52.0 * sd2, 55.0, 10.0), _team_metal[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_add_box(arch, Vector3(120, 14, 16), Vector3(0, 120.0, 0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_add_box(arch, Vector3(16, 118, 16), Vector3(64.0 * sd2, 59.0, 0), _stone_b).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_add_box(arch, Vector3(10, 104, 10), Vector3(64.0 * sd2, 55.0, 10.0), _team_metal[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_add_box(arch, Vector3(148, 14, 16), Vector3(0, 120.0, 0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		var crown := MeshInstance3D.new()
 		var cs := SphereMesh.new()
 		cs.radius = 12.0
@@ -1091,34 +1241,40 @@ func _build_goal_lanes(points: Dictionary) -> void:
 
 
 func _build_bases(points: Dictionary) -> void:
+	var ring_pt := _pt(points, "BS00")
+	var ring_r := Vector2(ring_pt.x, ring_pt.z).length()
 	for t in 4:
 		var c := Vector3.ZERO
 		for i in 4:
 			c += _pt(points, "HM%d_%d" % [t + 1, i + 1])
 		c /= 4.0
 		var outward := Vector3(c.x, 0, c.z).normalized()
+		var tangent := Vector3(-outward.z, 0, outward.x)
+		var ba := atan2(outward.z, outward.x)
 
-		var plat := _add_box(self, Vector3(310, 22, 310), Vector3(c.x, -3, c.z), _stone_dark)
-		plat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		_add_box(self, Vector3(300, 3, 300), Vector3(c.x, 7.0, c.z), _team_soft[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-		# 阵地四周的队伍色灯带
-		for sd in [-1.0, 1.0]:
-			_add_box(self, Vector3(300, 2.0, 7.0), Vector3(c.x, 9.0, c.z + 146.0 * sd), _team_metal[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_add_box(self, Vector3(7.0, 2.0, 300), Vector3(c.x + 146.0 * sd, 9.0, c.z), _team_metal[t]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
+		# 站位：1+3 两行紧凑弧形，贴着环道外沿，不再铺一大块圆形营地
 		for i in 4:
 			var p := _pt(points, "HM%d_%d" % [t + 1, i + 1])
-			_add_cyl(self, 33.0, 35.0, 2.4, Vector3(p.x, 8.6, p.z), _team_metal[t], 28).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_add_torus(self, 30.0, 35.0, Vector3(p.x, 9.4, p.z), _gold)
+			var pad := _add_cyl(self, 50.0, 53.0, 8.0, Vector3(p.x, 4.0, p.z), _stone_dark, 26)
+			pad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_add_cyl(self, 43.0, 44.0, 2.2, Vector3(p.x, 8.6, p.z), _team_metal[t], 26).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_torus(self, 40.0, 45.0, Vector3(p.x, 9.4, p.z), _gold)
 
-		# 阵地外圈呼吸环（当前回合高亮）
-		var halo := _add_torus(self, 142.0, 152.0, Vector3(c.x, 9.6, c.z), _team_glow[t])
+		# 队伍地界：贴着广场的一圈细光（当前回合会呼吸）
+		var halo := _add_torus(self, 132.0, 140.0, Vector3(c.x, 1.2, c.z), _team_glow[t])
 		halo.name = "BaseHalo%d" % t
+		halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_base_rings.append(halo)
 
-		# 队伍方尖碑
-		var ob_pos := Vector3(c.x, 0, c.z) + outward * 175.0
+		# 弧形石栏：把 1+3 四个站位围成"一家人的地界"，而不是散落的四块石头
+		for k in 7:
+			var ka := (float(k) - 3.0) * 0.062
+			var kp := outward * (ring_r + 228.0 + 74.0) + tangent * (sin(ka) * (ring_r + 302.0))
+			var kb := _add_box(self, Vector3(62.0, 10.0, 20.0), Vector3(kp.x, 5.0, kp.z), _stone_dark, -ba - ka - PI * 0.5)
+			kb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+		# 队伍图腾柱 + 旗帜：立在基地一侧
+		var ob_pos := c - tangent * 380.0
 		var ob := _add_cyl(self, 5.0, 24.0, 150.0, Vector3(ob_pos.x, 83.0, ob_pos.z), _team_metal[t], 4)
 		ob.rotation.y = deg_to_rad(45.0)
 		var gem := MeshInstance3D.new()
@@ -1135,7 +1291,6 @@ func _build_bases(points: Dictionary) -> void:
 		_base_gems.append(gem)
 		_add_torus(self, 26.0, 30.0, Vector3(ob_pos.x, 120.0, ob_pos.z), _team_glow[t], Vector3(deg_to_rad(90), 0, 0))
 
-		# 旗帜：旗杆 + 队伍色旗面（当前回合会摆动）
 		var flag := Node3D.new()
 		flag.position = Vector3(ob_pos.x, 0, ob_pos.z)
 		flag.name = "BaseFlag%d" % t
@@ -1154,6 +1309,54 @@ func _build_bases(points: Dictionary) -> void:
 		cloth_gem.position = Vector3(30.0, 108.0, 3.0)
 		flag.add_child(cloth_gem)
 		_base_flags.append(flag)
+
+		# 毡帐：扎在基地最外侧，门朝环道
+		var tent_pos := c - tangent * 240.0
+		var tent := Node3D.new()
+		tent.position = tent_pos
+		tent.rotation.y = atan2(-outward.x, -outward.z)
+		tent.name = "BaseTent%d" % t
+		add_child(tent)
+		_add_cyl(tent, 92.0, 96.0, 6.0, Vector3(0, 3.0, 0), _soil, 24)
+		# 短帐身 + 陡锥顶：从上往下看是一个"尖顶帐"，不会再像扁鼓或帽子
+		_add_cyl(tent, 66.0, 72.0, 58.0, Vector3(0, 35.0, 0), _path_a, 24)
+		_add_torus(tent, 70.0, 76.0, Vector3(0, 10.0, 0), _wood)
+		_add_torus(tent, 68.0, 73.0, Vector3(0, 52.0, 0), _team_soft[t])
+		var roof := _add_cyl(tent, 6.0, 88.0, 62.0, Vector3(0, 95.0, 0), _wood, 24)
+		roof.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		_add_torus(tent, 82.0, 90.0, Vector3(0, 66.0, 0), _gold)
+		_add_cyl(tent, 1.6, 1.6, 36.0, Vector3(0, 140.0, 0), _wood, 6).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var pennant := _add_box(tent, Vector3(2.0, 16.0, 36.0), Vector3(0, 152.0, 19.0), _team_glow[t])
+		pennant.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# 门帘朝环道，让"门在哪"一眼可辨
+		_add_box(tent, Vector3(26.0, 40.0, 8.0), Vector3(0, 24.0, 68.0), _stone_dark).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+		# 营地杂物：木箱 / 酒桶 / 柴堆，把"有人在这儿生活"的细节补上
+		var prop := tent_pos + outward * 44.0 - tangent * 62.0
+		_add_box(self, Vector3(30, 30, 30), Vector3(prop.x, 23.0, prop.z), _wood, 0.4)
+		_add_box(self, Vector3(24, 24, 24), Vector3(prop.x - tangent.x * 34.0, 20.0, prop.z - tangent.z * 34.0), _wood, -0.3)
+		_add_cyl(self, 15.0, 17.0, 34.0, Vector3(prop.x + outward.x * 36.0, 25.0, prop.z + outward.z * 36.0), _wood, 10)
+		var pile := prop + tangent * 58.0
+		var log1 := _add_cyl(self, 9.0, 9.0, 52.0, Vector3(pile.x, 17.0, pile.z), _wood, 8)
+		log1.rotation.z = deg_to_rad(90.0)
+		var log2 := _add_cyl(self, 9.0, 9.0, 46.0, Vector3(pile.x, 27.0, pile.z + 12.0), _wood, 8)
+		log2.rotation.z = deg_to_rad(90.0)
+
+		# 篝火：围石 + 交叉柴火 + 跳动的火苗
+		var fire := Node3D.new()
+		fire.position = c - tangent * 472.0
+		fire.name = "BaseFire%d" % t
+		add_child(fire)
+		for k in 6:
+			var fa := TAU * float(k) / 6.0
+			_add_cyl(fire, 7.0, 9.0, 9.0, Vector3(cos(fa) * 27.0, 12.5, sin(fa) * 27.0), _stone_dark, 6)
+		for k in 2:
+			var logm := _add_box(fire, Vector3(48, 9, 9), Vector3(0, 18.0, 0), _wood, deg_to_rad(36.0 + 92.0 * float(k)))
+			logm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var flame := _add_cyl(fire, 0.0, 16.0, 42.0, Vector3(0, 40.0, 0), _unshaded(Color("FFB258"), 1.7), 6)
+		flame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		flame.name = "Flame"
+		_camp_fires.append(flame)
 
 		var light := OmniLight3D.new()
 		light.position = Vector3(c.x, 70.0, c.z)
@@ -1175,39 +1378,46 @@ func set_active_team(team: int) -> void:
 
 
 func _build_center() -> void:
-	_add_box(self, Vector3(150, 24, 150), Vector3(0, 0, 0), _stone_dark)
-	_add_cyl(self, 52.0, 62.0, 30.0, Vector3(0, 27, 0), _stone_a, 32)
-	_add_torus(self, 40.0, 46.0, Vector3(0, 42.0, 0), _gold)
-	_add_torus(self, 60.0, 64.0, Vector3(0, 1.5, 0), _gold)
+	# 广场中央的水景：石砌水池 + 中央石柱 + 悬浮水球
+	_add_cyl(self, 150.0, 162.0, 16.0, Vector3(0, 8.0, 0), _stone_dark, 40)
+	_add_cyl(self, 132.0, 134.0, 3.0, Vector3(0, 15.5, 0), _water, 40).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_add_torus(self, 130.0, 152.0, Vector3(0, 17.0, 0), _stone_b)
+	for k in 4:
+		var a := TAU * float(k) / 4.0 + deg_to_rad(45.0)
+		_add_cyl(self, 16.0, 21.0, 18.0, Vector3(cos(a) * 142.0, 25.0, sin(a) * 142.0), _stone_dark, 6)
+	# 中央石柱与上水盘
+	_add_cyl(self, 26.0, 38.0, 56.0, Vector3(0, 47.0, 0), _stone_b, 22)
+	_add_cyl(self, 60.0, 28.0, 14.0, Vector3(0, 82.0, 0), _stone_a, 30)
+	_add_cyl(self, 44.0, 44.0, 3.0, Vector3(0, 89.0, 0), _water, 30).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	var orb := Node3D.new()
 	orb.name = "CenterOrb"
-	orb.position = Vector3(0, 118, 0)
+	orb.position = Vector3(0, 158, 0)
 	add_child(orb)
 	_center_orb = orb
 
 	var gem := MeshInstance3D.new()
 	var sm := SphereMesh.new()
-	sm.radius = 40.0
-	sm.height = 80.0
-	sm.radial_segments = 6
-	sm.rings = 2
+	sm.radius = 28.0
+	sm.height = 56.0
+	sm.radial_segments = 12
+	sm.rings = 6
 	gem.mesh = sm
 	gem.material_override = _gold
 	gem.name = "CenterGem"
 	orb.add_child(gem)
 
-	_add_torus(orb, 62.0, 66.0, Vector3.ZERO, _gold, Vector3(deg_to_rad(28), 0, 0))
-	_add_torus(orb, 78.0, 81.0, Vector3.ZERO, _trim, Vector3(deg_to_rad(-32), deg_to_rad(20), 0))
-	_add_torus(orb, 92.0, 95.0, Vector3.ZERO, _trim, Vector3(deg_to_rad(66), 0, deg_to_rad(18)))
+	# 金球外的两道细环
+	_add_torus(orb, 40.0, 44.0, Vector3.ZERO, _trim, Vector3(deg_to_rad(24), 0, 0))
+	_add_torus(orb, 52.0, 55.0, Vector3.ZERO, _trim, Vector3(deg_to_rad(-30), deg_to_rad(24), 0))
 
 	for t in 4:
 		var a := TAU * t / 4.0 + deg_to_rad(45.0)
-		var p := Vector3(cos(a) * 100.0, 62.0, sin(a) * 100.0)
+		var p := Vector3(cos(a) * 196.0, 30.0, sin(a) * 196.0)
 		var g := MeshInstance3D.new()
 		var s2 := SphereMesh.new()
-		s2.radius = 9.0
-		s2.height = 18.0
+		s2.radius = 11.0
+		s2.height = 22.0
 		s2.radial_segments = 4
 		s2.rings = 2
 		g.mesh = s2
@@ -1215,6 +1425,96 @@ func _build_center() -> void:
 		g.position = p
 		g.name = "CenterCrystal%d" % t
 		add_child(g)
+
+
+## 村落外景：远山 / 树木 / 灌木 / 岩石。非自然主题下整体隐藏
+func _build_scenery() -> void:
+	_scenery = Node3D.new()
+	_scenery.name = "Scenery"
+	add_child(_scenery)
+	var grow := maxf(_board_scale, 0.001)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6172
+
+	# 远山：地平线上一圈低多边形山丘，把场景纵深撑开
+	for k in 6:
+		var a := TAU * float(k) / 6.0 + 0.37
+		var dist := rng.randf_range(3600.0, 5000.0) * grow
+		var hr := rng.randf_range(700.0, 1100.0) * grow
+		var hill := MeshInstance3D.new()
+		var hm := SphereMesh.new()
+		hm.radius = hr
+		hm.height = hr * 0.72
+		hm.radial_segments = 14
+		hm.rings = 7
+		hill.mesh = hm
+		hill.material_override = _leaf_c
+		hill.position = Vector3(cos(a) * dist, SCENE_GROUND - hr * 0.24, sin(a) * dist)
+		hill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_scenery.add_child(hill)
+
+	# 从广场延伸出去的土路：让这里像村落的中心广场，而不是一块棋盘
+	for k in 3:
+		var a := TAU * float(k) / 3.0 + 0.9
+		var d := Vector3(cos(a), 0, sin(a))
+		var plen := 1150.0 * grow
+		var start := 1580.0 * grow
+		var road := _add_box(_scenery, Vector3(plen, 4.0, 180.0), Vector3(d.x * (start + plen * 0.5), SCENE_GROUND + 1.0, d.z * (start + plen * 0.5)), _soil, -a)
+		road.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	# 环广场一周的树木：真实树高，站在草地上衬出广场的尺度
+	for k in 14:
+		var a := TAU * float(k) / 14.0 + rng.randf_range(-0.12, 0.12)
+		# 相机默认从 34° 方位看进来，这个方向留空，避免树挡住画面
+		if absf(wrapf(a - deg_to_rad(34.0), -PI, PI)) < 0.34:
+			continue
+		var dist := rng.randf_range(1780.0, 2400.0) * grow
+		var px := cos(a) * dist
+		var pz := sin(a) * dist
+		var th := rng.randf_range(400.0, 640.0)
+		_add_cyl(_scenery, 12.0, 22.0, th, Vector3(px, SCENE_GROUND + th * 0.5, pz), _wood, 8).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		for c in 3:
+			var cr := rng.randf_range(105.0, 168.0)
+			var leaf := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = cr
+			sm.height = cr * 1.55
+			sm.radial_segments = 10
+			sm.rings = 5
+			leaf.mesh = sm
+			leaf.material_override = _leaf_a if c % 2 == 0 else _leaf_b
+			leaf.position = Vector3(px + rng.randf_range(-40.0, 40.0), SCENE_GROUND + th * 0.88 + float(c) * cr * 0.58, pz + rng.randf_range(-40.0, 40.0))
+			leaf.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_scenery.add_child(leaf)
+
+	# 灌木与散石：给草地加些近处的细节
+	for k in 10:
+		var a := TAU * float(k) / 10.0 + 0.9
+		var dist := rng.randf_range(1740.0, 2300.0) * grow
+		var px := cos(a) * dist
+		var pz := sin(a) * dist
+		for c in 2:
+			var br := rng.randf_range(38.0, 66.0)
+			var bush := MeshInstance3D.new()
+			var bm := SphereMesh.new()
+			bm.radius = br
+			bm.height = br * 1.05
+			bm.radial_segments = 8
+			bm.rings = 4
+			bush.mesh = bm
+			bush.material_override = _leaf_b if c == 0 else _leaf_c
+			bush.position = Vector3(px + float(c) * 52.0 * cos(a), SCENE_GROUND + br * 0.4, pz + float(c) * 52.0 * sin(a))
+			bush.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			_scenery.add_child(bush)
+	for k in 10:
+		var a := TAU * float(k) / 10.0 + 2.1
+		var dist := rng.randf_range(1740.0, 2340.0) * grow
+		var rr := rng.randf_range(30.0, 72.0)
+		var rock := _add_cyl(_scenery, rr * 0.7, rr, rr * 0.62, Vector3(cos(a) * dist, SCENE_GROUND + rr * 0.24, sin(a) * dist), _stone_dark, 6)
+		rock.rotation.y = a * 2.3
+		rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+	_scenery.visible = bool(THEMES[theme_id].get("nature", false))
 
 
 func _build_motes() -> void:
@@ -1399,9 +1699,15 @@ func make_piece(team: int, style := 0) -> Node3D:
 	var ring := _add_torus(root, 38.0, 47.0, Vector3(0, 7.0, 0), _team_glow[team])
 	ring.name = "Ring"
 
+	# 接地软阴影：一圈渐变的暗斑，人物看起来是站在石板上，而不是飘在半空
+	var shadow := _add_contact_shadow(root, 64.0)
+	shadow.name = "ContactShadow"
+
 	# 拟人化身体：所有部件挂在 Body 下，可独立做呼吸 / 出剑 / 受击动画
 	var body := Node3D.new()
 	body.name = "Body"
+	# 人物比例放大一档：底座不变，身形/头盔更高大，远看也读得出是"人"
+	body.scale = Vector3(1.16, 1.24, 1.16)
 	root.add_child(body)
 
 	var torso := MeshInstance3D.new()
@@ -1411,6 +1717,9 @@ func make_piece(team: int, style := 0) -> Node3D:
 
 	var belt := _add_torus(body, 16.0, 20.0, Vector3(0, 34.0, 0), _gold)
 	belt.name = "Belt"
+	# 腰带扣：正面一枚小金牌，近看有做工感
+	var buckle := _add_box(body, Vector3(7.0, 7.0, 3.0), Vector3(0, 34.0, 20.0), _gold)
+	buckle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if style != 7:
 		var crest := _add_box(body, Vector3(15.0, 20.0, 4.0), Vector3(0, 62.0, 19.0), _team_glow[team])
 		crest.name = "Crest"
@@ -1795,23 +2104,63 @@ func _build_dice() -> void:
 	_dice = Node3D.new()
 	_dice.name = "Dice"
 	_dice.position = _dice_home
-	_dice.scale = Vector3(0.82, 0.82, 0.82)
+	_dice.scale = Vector3(1.32, 1.32, 1.32)
 	add_child(_dice)
 
-	var body := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(96, 96, 96)
-	body.mesh = bm
-	var mat := _pbr(Color("f4efe4"), 0.05, 0.34)
-	body.material_override = mat
-	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	_dice.add_child(body)
+	# 立体骰子模型：六块面板 + 12 条倒角棱 + 8 个圆角球，拼成一颗真正圆润的骰子
+	# （Godot 没有内置倒角立方体，用基础几何拼反而能得到干净的圆角高光）
+	var half := 46.0
+	var bevel := 8.0
+	var inner := half - bevel
+	var face := inner * 2.0
+	var ivory := _pbr(Color("ece4d4"), 0.04, 0.34)
+	ivory.rim_enabled = true
+	ivory.rim = 0.45
+	ivory.rim_tint = 0.55
+
+	for axis in 3:
+		for s in [-1.0, 1.0]:
+			var size := Vector3(6.0, face, face)
+			var pos := Vector3((half - 3.0) * s, 0, 0)
+			if axis == 1:
+				size = Vector3(face, 6.0, face)
+				pos = Vector3(0, (half - 3.0) * s, 0)
+			elif axis == 2:
+				size = Vector3(face, face, 6.0)
+				pos = Vector3(0, 0, (half - 3.0) * s)
+			_add_box(_dice, size, pos, ivory)
+
+	for axis in 3:
+		for sa in [-1.0, 1.0]:
+			for sb in [-1.0, 1.0]:
+				if axis == 0:
+					var ex := _add_cyl(_dice, bevel, bevel, face, Vector3(0, inner * sa, inner * sb), ivory, 12)
+					ex.rotation.z = PI * 0.5
+				elif axis == 1:
+					_add_cyl(_dice, bevel, bevel, face, Vector3(inner * sa, 0, inner * sb), ivory, 12)
+				else:
+					var ez := _add_cyl(_dice, bevel, bevel, face, Vector3(inner * sa, inner * sb, 0), ivory, 12)
+					ez.rotation.x = PI * 0.5
+
+	var corner_mesh := SphereMesh.new()
+	corner_mesh.radius = bevel
+	corner_mesh.height = bevel * 2.0
+	corner_mesh.radial_segments = 12
+	corner_mesh.rings = 6
+	for sa in [-1.0, 1.0]:
+		for sb in [-1.0, 1.0]:
+			for sc in [-1.0, 1.0]:
+				var corner := MeshInstance3D.new()
+				corner.mesh = corner_mesh
+				corner.material_override = ivory
+				corner.position = Vector3(inner * sa, inner * sb, inner * sc)
+				_dice.add_child(corner)
 
 	var pip_mat := _pbr(Color("141821"), 0.25, 0.42)
 	var pip_mesh := SphereMesh.new()
-	pip_mesh.radius = 8.0
-	pip_mesh.height = 16.0
-	pip_mesh.radial_segments = 10
+	pip_mesh.radius = 7.4
+	pip_mesh.height = 13.0
+	pip_mesh.radial_segments = 12
 	pip_mesh.rings = 6
 	pip_mesh.material = pip_mat
 
@@ -1824,17 +2173,62 @@ func _build_dice() -> void:
 		6: [Vector2i(-1, -1), Vector2i(-1, 0), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1)],
 	}
 	for value in DIE_FACES.keys():
-		var face: Dictionary = DIE_FACES[value]
-		var nrm: Vector3 = face["n"]
-		var uax: Vector3 = face["u"]
-		var vax: Vector3 = face["v"]
+		var face_data: Dictionary = DIE_FACES[value]
+		var nrm: Vector3 = face_data["n"]
+		var uax: Vector3 = face_data["u"]
+		var vax: Vector3 = face_data["v"]
 		for cell in layouts[value]:
-			var off: Vector3 = nrm * 48.0 + uax * (float(cell.x) * 21.0) + vax * (float(cell.y) * 21.0)
+			var off: Vector3 = nrm * (half - 4.0) + uax * (float(cell.x) * 20.0) + vax * (float(cell.y) * 20.0)
 			var pip := MeshInstance3D.new()
 			pip.mesh = pip_mesh
 			pip.position = off
 			pip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			_dice.add_child(pip)
+
+	# 投掷拖影：一串逐渐变小变淡的光点，跟着骰子飞行
+	_dice_trail.clear()
+	_dice_trail_pts.clear()
+	for i in 6:
+		var orb := MeshInstance3D.new()
+		var osm := SphereMesh.new()
+		osm.radius = 9.0
+		osm.height = 18.0
+		osm.radial_segments = 10
+		osm.rings = 5
+		orb.mesh = osm
+		var om := _pbr(Color("ffe6b0"), 0.0, 0.4)
+		om.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		om.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		om.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		om.albedo_color = Color(1.0, 0.92, 0.72, 0.5 - 0.06 * float(i))
+		orb.material_override = om
+		orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		orb.visible = false
+		add_child(orb)
+		_dice_trail.append(orb)
+
+
+## 拖影跟随：掷骰时按轨迹留下光点，停下后立刻隐去
+func _update_dice_trail() -> void:
+	if _dice == null or _dice_trail.is_empty():
+		return
+	if _rolling:
+		_dice_trail_pts.push_front(_dice.global_position)
+		if _dice_trail_pts.size() > _dice_trail.size():
+			_dice_trail_pts.pop_back()
+	else:
+		_dice_trail_pts.clear()
+	for i in _dice_trail.size():
+		var orb: MeshInstance3D = _dice_trail[i]
+		if not is_instance_valid(orb):
+			continue
+		if _rolling and i < _dice_trail_pts.size():
+			var k := 1.0 - float(i) / float(_dice_trail.size())
+			orb.visible = true
+			orb.global_position = _dice_trail_pts[i]
+			orb.scale = Vector3.ONE * (0.3 + 0.55 * k)
+		elif orb.visible:
+			orb.visible = false
 
 
 func _dice_rest_euler(value: int) -> Vector3:
@@ -1877,7 +2271,13 @@ func roll_dice(value: int) -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 	var drop := create_tween()
-	drop.tween_property(_dice, "position", land, 0.30).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	# 抛掷弧线：先抬手蓄力，再朝镜头方向甩出，最后加速砸向中心
+	drop.tween_property(_dice, "position", _dice_home + Vector3(0.0, 110.0, 0.0), 0.13) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	drop.tween_property(_dice, "position", land + Vector3(190.0, 150.0, 250.0), 0.18) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	drop.tween_property(_dice, "position", land, 0.22) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	drop.tween_property(_dice, "position:y", land.y + 54.0, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	drop.tween_property(_dice, "position:y", land.y, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	drop.tween_property(_dice, "position:y", land.y + 24.0, 0.09)
@@ -1888,6 +2288,10 @@ func roll_dice(value: int) -> void:
 		spin.kill()
 	_dice.position = land
 	_dice.rotation = rest
+	# 落地挤压：骰子砸下来瞬间压扁再弹回，撞击才有重量
+	var squash := create_tween()
+	squash.tween_property(_dice, "scale", Vector3(1.58, 1.06, 1.58), 0.07).set_trans(Tween.TRANS_QUAD)
+	squash.tween_property(_dice, "scale", Vector3(1.32, 1.32, 1.32), 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	impact(land, Color("ffe6b0"))
 	await get_tree().create_timer(0.55).timeout
 
