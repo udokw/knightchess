@@ -45,8 +45,8 @@ const ITEM_INFO := {
 }
 
 const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵"]
-const BOARD_SIZES := [28, 40, 52]
-const BOARD_SIZE_NAMES := ["小型 · 28 格", "标准 · 40 格", "大型 · 52 格"]
+const BOARD_SIZES := [40, 52, 64]
+const BOARD_SIZE_NAMES := ["标准 · 40 格", "大型 · 52 格", "巨型 · 64 格"]
 
 var _root: Control
 var _log_panel: PanelContainer

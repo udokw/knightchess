@@ -176,6 +176,7 @@ func _ready() -> void:
 			menu_mode = true
 
 	_load_data()
+	_apply_board_size(FIELDS)
 	_setup_world()
 	_setup_camera()
 	_setup_audio()
@@ -226,30 +227,28 @@ func _load_data() -> void:
 
 ## 在 40 格原始环线上按弧长重采样出任意格数的棋盘
 func _apply_board_size(n: int) -> void:
-	n = clampi(n, 20, 60)
+	n = clampi(n, 40, 64)
 	board_cells = n
 	FIELDS = n
 	if base_points.is_empty():
 		return
+	# 格数增加时棋盘整体外扩：坐标按 n/40 放大，格子世界尺寸保持 100 不变
+	var grow := float(n) / float(BASE_FIELDS)
 	pts = {}
-	for k in base_points.keys():
-		pts[k] = base_points[k]
-	var base_ring: Array = data["paths"]["TEAMPATH1"]
-	var m: int = base_ring.size()
-	if m <= 0:
-		return
+	# 环道：正圆均匀分布（参照原作），半径随格数增大，格子间距恒定
+	var ring_r := 572.0 * grow
+	var a0 := deg_to_rad(-168.7)
 	for k in n:
-		var fk := float(k) * float(m) / float(n)
-		var i0 := int(floor(fk)) % m
-		var i1 := (i0 + 1) % m
-		var fr: float = fk - floor(fk)
-		var p0: Array = base_points[base_ring[i0]]
-		var p1: Array = base_points[base_ring[i1]]
-		pts["BS%02d" % k] = [
-			lerpf(float(p0[0]), float(p1[0]), fr),
-			lerpf(float(p0[1]), float(p1[1]), fr),
-			lerpf(float(p0[2]), float(p1[2]), fr),
-		]
+		var ang := a0 + TAU * float(k) / float(n)
+		pts["BS%02d" % k] = [cos(ang) * ring_r, 1.0, sin(ang) * ring_r]
+	# 终点跑道：从中心指向环内侧，略延伸以贴近环道
+	for k in base_points.keys():
+		var key := String(k)
+		if not key.begins_with("GL") and not key.begins_with("HM"):
+			continue
+		var bp: Array = base_points[key]
+		var f := grow * (1.25 if key.begins_with("GL") else 1.35)
+		pts[key] = [float(bp[0]) * f, float(bp[1]), float(bp[2]) * f]
 	paths = []
 	var step := n / 4
 	for t in 4:
@@ -312,8 +311,10 @@ func _setup_camera() -> void:
 func _fit_camera() -> void:
 	cam_yaw = deg_to_rad(34.0)
 	cam_pitch = deg_to_rad(52.0)
-	cam_dist = 2860.0
-	cam_target = Vector3(0, -60.0, 0)
+	# 棋盘越大，镜头略微拉远，保证四角基地基本在视野内
+	var grow := float(FIELDS) / float(BASE_FIELDS)
+	cam_dist = 2860.0 * (1.0 + 0.58 * (grow - 1.0))
+	cam_target = Vector3(0, 40.0, 0)
 	_update_camera()
 
 
@@ -425,7 +426,7 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	game_mode = mode
 	ai_level = level
 	theme_id = selected_theme
-	board_cells = clampi(cells, 20, 60)
+	board_cells = clampi(cells, 40, 64)
 	var new_styles: Array = []
 	for t in 4:
 		var s := t
@@ -2397,15 +2398,14 @@ func _try_world_pick(screen_pos: Vector2) -> void:
 	var dir := camera.project_ray_normal(screen_pos)
 	if absf(dir.y) < 0.0001:
 		return
-	var s := _board_scale()
-	# 棋子随棋盘整体缩放，拾取平面与半径都按棋盘缩放换算
-	var hit_y := (BOARD_Y + 78.0) * s
+	# 棋子模型世界尺寸恒定，拾取平面取棋子腰高
+	var hit_y := BOARD_Y + 78.0
 	var t := (hit_y - origin.y) / dir.y
 	if t <= 0.0:
 		return
 	var hit := origin + dir * t
 	var best := -1
-	var best_d := 88.0 * s
+	var best_d := 88.0
 	for i in _pick_pool:
 		var p: Dictionary = pieces[i]
 		var node: Node3D = p["node"]

@@ -6,9 +6,15 @@ extends Node3D
 ##  - 程序化棋子（车削网格）、3D 骰子、落点与吃子特效
 
 const TILE_SIZE := 100.0
+## 画面清晰度调校：弱化辉光与雾、提升对比与暗部，避免“眼花缭乱”
+const GLOW_SCALE := 0.32
+const FOG_SCALE := 0.32
+const AMBIENT_LIFT := 1.25
+const SAT_SCALE := 0.92
+const CONTRAST := 1.16
 const TILE_TOP := 8.0
 const DECK_HALF := 890.0
-const DICE_HOME := Vector3(0, 300, 0)
+const DICE_HOME_BASE := Vector3(0, 300, 0)
 const DICE_LAND := Vector3(0, 216, 0)
 
 const DIE_FACES := {
@@ -130,6 +136,7 @@ var _piece_marks: Array = []
 var _time := 0.0
 var _rolling := false
 var _dice_locked := false
+var _dice_home := DICE_HOME_BASE
 var _tile_size := TILE_SIZE
 var _board_scale := 1.0
 
@@ -159,8 +166,9 @@ func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk",
 	theme_id = theme if THEMES.has(theme) else "dusk"
 	_tile_size = tile_size
 	_board_scale = board_scale
-	# 棋盘格数越多，整块竞技台按比例放大（28 格 → 0.7 倍，52 格 → 1.3 倍）
-	scale = Vector3.ONE * board_scale
+	# 骰子停在台面靠镜头一侧的边缘外，避免遮挡棋盘中心
+	_dice_home = Vector3(0, 300.0, (DECK_HALF + 70.0) * board_scale)
+	# 棋盘不再整体缩放：格数越多，坐标外扩越大，格子世界尺寸恒定，画面更清晰不拥挤
 	_build_environment()
 	_make_materials()
 	_build_platform()
@@ -191,7 +199,7 @@ func _process(delta: float) -> void:
 		_motes.rotation.y += delta * 0.01
 	_animate_theme_fx(delta)
 	if _dice and not _rolling:
-		_dice.position.y = DICE_HOME.y + sin(_time * 1.6) * 5.0
+		_dice.position.y = _dice_home.y + sin(_time * 1.6) * 5.0
 		_dice.rotation.y += delta * 0.55
 		_dice.rotation.x = sin(_time * 0.9) * 0.16
 
@@ -318,29 +326,29 @@ func _build_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_sky_contribution = 1.0
-	env.ambient_light_energy = th["ambient"]
+	env.ambient_light_energy = float(th["ambient"]) * AMBIENT_LIFT
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_exposure = th["exposure"]
 	env.glow_enabled = true
-	env.glow_intensity = th["glow"]
-	env.glow_strength = 1.0
-	env.glow_bloom = 0.08
-	env.glow_hdr_threshold = 0.85
-	env.set("glow_levels/2", 1.0)
-	env.set("glow_levels/3", 1.0)
-	env.set("glow_levels/4", 0.6)
+	env.glow_intensity = float(th["glow"]) * GLOW_SCALE
+	env.glow_strength = 0.9
+	env.glow_bloom = 0.0
+	env.glow_hdr_threshold = 1.15
+	env.set("glow_levels/2", 0.8)
+	env.set("glow_levels/3", 0.6)
+	env.set("glow_levels/4", 0.25)
 	env.adjustment_enabled = true
-	env.adjustment_saturation = th["saturation"]
-	env.adjustment_contrast = 1.08
+	env.adjustment_saturation = float(th["saturation"]) * SAT_SCALE
+	env.adjustment_contrast = CONTRAST
 	env.ssao_enabled = false
 	env.ssil_enabled = false
 	env.sdfgi_enabled = false
 	env.volumetric_fog_enabled = false
 	env.fog_enabled = true
 	env.fog_light_color = Color(th["fog_color"])
-	env.fog_light_energy = th["fog_energy"]
-	env.fog_density = th["fog_density"]
+	env.fog_light_energy = float(th["fog_energy"]) * FOG_SCALE
+	env.fog_density = float(th["fog_density"]) * FOG_SCALE
 	env.fog_sky_affect = 0.0
 	we.environment = env
 	add_child(we)
@@ -402,24 +410,24 @@ func _make_materials() -> void:
 	_recolor_stone(_stone_dark, Color(th["stone_dark"]), float(th["tint_dark"]), 0.0011, 0.3, 0.5)
 
 	_deck_top = _pbr(Color(th["deck"]), 0.26, 0.58)
-	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]), 0.0009, 0.26, 0.58)
+	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * 1.28, 0.0009, 0.26, 0.58)
 
 	_gold = _pbr(Color(th["gold"]), 0.72, 0.3)
 	_gold.emission_enabled = true
 	_gold.emission = Color(th["gold_em"])
-	_gold.emission_energy_multiplier = 0.55
+	_gold.emission_energy_multiplier = 0.28
 	_gold.rim_enabled = true
-	_gold.rim = 0.4
+	_gold.rim = 0.18
 
 	_trim = _pbr(Color("101820"), 0.4, 0.3)
 	_trim.emission_enabled = true
 	_trim.emission = Color(th["trim"])
-	_trim.emission_energy_multiplier = 1.8
+	_trim.emission_energy_multiplier = 0.7
 
 	_chevron = _pbr(Color(th["chevron"]).darkened(0.3), 0.5, 0.42)
 	_chevron.emission_enabled = true
 	_chevron.emission = Color(th["chevron_em"])
-	_chevron.emission_energy_multiplier = 0.95
+	_chevron.emission_energy_multiplier = 0.5
 
 	for c in team_colors:
 		var m := _pbr(Color(c).darkened(0.04), 0.34, 0.34)
@@ -433,7 +441,7 @@ func _make_materials() -> void:
 		var g := _pbr(Color(c).darkened(0.55), 0.2, 0.35)
 		g.emission_enabled = true
 		g.emission = c
-		g.emission_energy_multiplier = 1.7
+		g.emission_energy_multiplier = 1.1
 		_team_glow.append(g)
 
 		var s := _pbr(Color(c).darkened(0.45), 0.32, 0.5)
@@ -464,7 +472,7 @@ func _apply_stone(m: StandardMaterial3D, tint: float, tri: float) -> void:
 		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	m.normal_enabled = true
 	m.normal_texture = _noise_tex
-	m.normal_scale = 0.6
+	m.normal_scale = 0.35
 	m.uv1_triplanar = true
 	m.uv1_scale = Vector3(tri, tri, tri)
 
@@ -472,16 +480,19 @@ func _apply_stone(m: StandardMaterial3D, tint: float, tri: float) -> void:
 func _recolor_stone(m: StandardMaterial3D, base: Color, tint: float, tri: float, metallic: float, rough: float) -> void:
 	if m == null:
 		return
-	m.albedo_color = Color(base.r * tint, base.g * tint, base.b * tint)
+	# 台面提亮：让棋盘、棋子、道具分层清晰，不再大片死黑
+	var t := minf(tint * 1.20, 1.08)
+	m.albedo_color = Color(base.r * t, base.g * t, base.b * t)
 	m.metallic = metallic
 	m.roughness = rough
-	m.albedo_texture = _stone_alb
+	# 不再叠加偏暗的石纹贴图（否则台面发黑），保留法线/粗糙度贴图提供质感
+	m.albedo_texture = null
 	if _stone_rgh:
 		m.roughness_texture = _stone_rgh
 		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	m.normal_enabled = true
 	m.normal_texture = _noise_tex
-	m.normal_scale = 0.6
+	m.normal_scale = 0.35
 	m.uv1_triplanar = true
 	m.uv1_scale = Vector3(tri, tri, tri)
 
@@ -495,13 +506,13 @@ func set_theme(id: String) -> void:
 	var th: Dictionary = THEMES[id]
 
 	if _env:
-		_env.ambient_light_energy = th["ambient"]
+		_env.ambient_light_energy = float(th["ambient"]) * AMBIENT_LIFT
 		_env.tonemap_exposure = th["exposure"]
-		_env.glow_intensity = th["glow"]
-		_env.adjustment_saturation = th["saturation"]
+		_env.glow_intensity = float(th["glow"]) * GLOW_SCALE
+		_env.adjustment_saturation = float(th["saturation"]) * SAT_SCALE
 		_env.fog_light_color = Color(th["fog_color"])
-		_env.fog_light_energy = th["fog_energy"]
-		_env.fog_density = th["fog_density"]
+		_env.fog_light_energy = float(th["fog_energy"]) * FOG_SCALE
+		_env.fog_density = float(th["fog_density"]) * FOG_SCALE
 		var sky_path: String = th["sky"]
 		if ResourceLoader.exists(sky_path) and _env.sky:
 			var pano := PanoramaSkyMaterial.new()
@@ -522,7 +533,7 @@ func set_theme(id: String) -> void:
 	_recolor_stone(_stone_a, Color(th["stone_a"]), float(th["tint_a"]), 0.0014, 0.22, 0.62)
 	_recolor_stone(_stone_b, Color(th["stone_b"]), float(th["tint_b"]), 0.0014, 0.22, 0.56)
 	_recolor_stone(_stone_dark, Color(th["stone_dark"]), float(th["tint_dark"]), 0.0011, 0.3, 0.5)
-	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]), 0.0009, 0.26, 0.58)
+	_recolor_stone(_deck_top, Color(th["deck"]), float(th["tint_deck"]) * 1.28, 0.0009, 0.26, 0.58)
 
 	if _gold:
 		_gold.albedo_color = Color(th["gold"])
@@ -613,10 +624,11 @@ func _pt(points: Dictionary, name: String) -> Vector3:
 # ---------------------------------------------------------------- 石台与环道
 
 func _build_platform() -> void:
+	var grow := maxf(_board_scale, 0.001)
 	var under := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = 1240.0
-	cm.bottom_radius = 560.0
+	cm.top_radius = 1240.0 * grow
+	cm.bottom_radius = 560.0 * grow
 	cm.height = 460.0
 	cm.radial_segments = 4
 	under.mesh = cm
@@ -625,13 +637,14 @@ func _build_platform() -> void:
 	under.position.y = -260.0
 	add_child(under)
 
-	var deck := _add_box(self, Vector3(DECK_HALF * 2.0, 34.0, DECK_HALF * 2.0), Vector3(0, -17, 0), _stone_dark)
+	var deck_half := DECK_HALF * grow
+	var deck := _add_box(self, Vector3(deck_half * 2.0, 34.0, deck_half * 2.0), Vector3(0, -17, 0), _stone_dark)
 	deck.name = "Deck"
 
-	var top := _add_box(self, Vector3(DECK_HALF * 2.0 - 40.0, 8.0, DECK_HALF * 2.0 - 40.0), Vector3(0, -4, 0), _deck_top)
+	var top := _add_box(self, Vector3(deck_half * 2.0 - 40.0, 8.0, deck_half * 2.0 - 40.0), Vector3(0, -4, 0), _deck_top)
 	top.name = "DeckTop"
 
-	var eh := DECK_HALF
+	var eh := deck_half
 	for i in 4:
 		var size := Vector3(eh * 2.0 - 6.0, 5.0, 10.0)
 		var pos := Vector3.ZERO
@@ -650,7 +663,7 @@ func _build_platform() -> void:
 		trim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	# 台面内圈的一圈暗刻线
-	var ring := _add_torus(self, 690.0, 700.0, Vector3(0, 1.5, 0), _gold)
+	var ring := _add_torus(self, 690.0 * grow, 700.0 * grow, Vector3(0, 1.5, 0), _gold)
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
@@ -758,17 +771,17 @@ func _make_chest(tile: Node3D) -> void:
 	# 光柱：让宝箱格从高空一眼可辨
 	var beam := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = 30.0
-	cm.bottom_radius = 16.0
-	cm.height = 320.0
+	cm.top_radius = 26.0
+	cm.bottom_radius = 14.0
+	cm.height = 210.0
 	cm.radial_segments = 18
 	cm.cap_top = false
 	cm.cap_bottom = false
 	beam.mesh = cm
 	var bm := _unshaded(Color("ffd166"), 1.3)
-	(bm as StandardMaterial3D).albedo_color = Color(1.0, 0.82, 0.4, 0.13)
+	(bm as StandardMaterial3D).albedo_color = Color(1.0, 0.82, 0.4, 0.07)
 	beam.material_override = bm
-	beam.position.y = 96.0
+	beam.position.y = 78.0
 	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tile.add_child(beam)
 
@@ -776,8 +789,8 @@ func _make_chest(tile: Node3D) -> void:
 	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	# 头顶「？」招牌：远处也能一眼看出这是事件格
-	var sign_l := _billboard_label("？", Color("fff6dd"), 96.0)
-	sign_l.position = Vector3(0, 108.0, 0)
+	var sign_l := _billboard_label("？", Color("fff6dd"), 64.0)
+	sign_l.position = Vector3(0, 100.0, 0)
 	chest.add_child(sign_l)
 
 
@@ -791,30 +804,30 @@ func _make_item_pad(tile: Node3D) -> void:
 	var cm := PrismMesh.new()
 	cm.size = Vector3(34.0, 58.0, 34.0)
 	crystal.mesh = cm
-	crystal.material_override = _unshaded(Color("8ff0c0"), 2.4)
+	crystal.material_override = _unshaded(Color("8ff0c0"), 1.4)
 	crystal.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	gem.add_child(crystal)
-	var halo := _add_torus(tile, 24.0, 30.0, Vector3(0, 2.0, 0), _unshaded(Color("8ff0c0"), 1.9))
+	var halo := _add_torus(tile, 24.0, 30.0, Vector3(0, 2.0, 0), _unshaded(Color("8ff0c0"), 1.2))
 	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	var beam := MeshInstance3D.new()
 	var bcm := CylinderMesh.new()
-	bcm.top_radius = 22.0
-	bcm.bottom_radius = 12.0
-	bcm.height = 240.0
+	bcm.top_radius = 18.0
+	bcm.bottom_radius = 10.0
+	bcm.height = 180.0
 	bcm.radial_segments = 14
 	bcm.cap_top = false
 	bcm.cap_bottom = false
 	beam.mesh = bcm
 	var bm := _unshaded(Color("8ff0c0"), 1.2)
-	(bm as StandardMaterial3D).albedo_color = Color(0.56, 0.94, 0.75, 0.12)
+	(bm as StandardMaterial3D).albedo_color = Color(0.56, 0.94, 0.75, 0.06)
 	beam.material_override = bm
-	beam.position.y = 84.0
+	beam.position.y = 64.0
 	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tile.add_child(beam)
 
-	var sign_l := _billboard_label("道具", Color("dfffe8"), 70.0)
-	sign_l.position = Vector3(0, 96.0, 0)
+	var sign_l := _billboard_label("道具", Color("dfffe8"), 42.0)
+	sign_l.position = Vector3(0, 76.0, 0)
 	gem.add_child(sign_l)
 
 
@@ -875,17 +888,17 @@ func _make_portal_pad(tile: Node3D) -> void:
 
 	var beam := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = 26.0
-	cm.bottom_radius = 12.0
-	cm.height = 260.0
+	cm.top_radius = 20.0
+	cm.bottom_radius = 10.0
+	cm.height = 190.0
 	cm.radial_segments = 16
 	cm.cap_top = false
 	cm.cap_bottom = false
 	beam.mesh = cm
 	var bm := _unshaded(Color("b484ff"), 1.2)
-	(bm as StandardMaterial3D).albedo_color = Color(0.70, 0.52, 1.0, 0.10)
+	(bm as StandardMaterial3D).albedo_color = Color(0.70, 0.52, 1.0, 0.06)
 	beam.material_override = bm
-	beam.position.y = 120.0
+	beam.position.y = 92.0
 	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tile.add_child(beam)
 
@@ -944,27 +957,27 @@ func spawn_event_cell(pos: Vector3, color: Color, symbol: String) -> Node3D:
 	sm.radial_segments = 4
 	sm.rings = 2
 	core.mesh = sm
-	core.material_override = _unshaded(color.lightened(0.45), 3.4)
+	core.material_override = _unshaded(color.lightened(0.45), 1.8)
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(core)
 
-	var lbl := _billboard_label(symbol, color.lightened(0.35), 52.0)
-	lbl.position = Vector3(0, 46.0, 0)
+	var lbl := _billboard_label(symbol, color.lightened(0.35), 40.0)
+	lbl.position = Vector3(0, 42.0, 0)
 	root.add_child(lbl)
 
 	var beam := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = 24.0
-	cm.bottom_radius = 10.0
-	cm.height = 300.0
+	cm.top_radius = 18.0
+	cm.bottom_radius = 9.0
+	cm.height = 190.0
 	cm.radial_segments = 16
 	cm.cap_top = false
 	cm.cap_bottom = false
 	beam.mesh = cm
 	var bm := _unshaded(color, 1.4)
-	(bm as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.12)
+	(bm as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.055)
 	beam.material_override = bm
-	beam.position = Vector3(0, 120.0, 0)
+	beam.position = Vector3(0, 80.0, 0)
 	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(beam)
 	return root
@@ -1211,7 +1224,7 @@ func _build_motes() -> void:
 	rng.seed = 7788
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.instance_count = 90
+	mm.instance_count = 40
 	var sm := SphereMesh.new()
 	sm.radius = 1.8
 	sm.height = 3.6
@@ -1222,13 +1235,13 @@ func _build_motes() -> void:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.emission_enabled = true
 	mat.emission = Color(th["motes"])
-	mat.emission_energy_multiplier = 1.8
+	mat.emission_energy_multiplier = 0.9
 	_motes_mat = mat
 	sm.material = mat
 	mm.mesh = sm
 	for i in mm.instance_count:
 		var a := rng.randf() * TAU
-		var r := sqrt(rng.randf()) * 980.0
+		var r := sqrt(rng.randf()) * 980.0 * _board_scale
 		var y := rng.randf_range(20.0, 520.0)
 		var xf := Transform3D(Basis(), Vector3(cos(a) * r, y, sin(a) * r))
 		mm.set_instance_transform(i, xf)
@@ -1243,7 +1256,7 @@ func _build_theme_fx() -> void:
 	_theme_kind = theme_id
 	if DisplayServer.get_name() == "headless":
 		return
-	var count := 90
+	var count := 42
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.instance_count = count
@@ -1287,10 +1300,10 @@ func _build_theme_fx() -> void:
 		col = Color(0.62, 1.0, 0.72)
 	elif theme_id == "void":
 		col = Color(0.76, 0.66, 1.0)
-	mat.albedo_color = Color(col.r, col.g, col.b, 0.9)
+	mat.albedo_color = Color(col.r, col.g, col.b, 0.5)
 	mat.emission_enabled = true
 	mat.emission = col
-	mat.emission_energy_multiplier = 2.4
+	mat.emission_energy_multiplier = 1.2
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if mesh is PrimitiveMesh:
 		(mesh as PrimitiveMesh).material = mat
@@ -1302,7 +1315,7 @@ func _build_theme_fx() -> void:
 	rng.seed = 20261117
 	for i in count:
 		var a := rng.randf() * TAU
-		var r := sqrt(rng.randf()) * 1060.0
+		var r := sqrt(rng.randf()) * 1060.0 * _board_scale
 		var y := rng.randf_range(10.0, 620.0)
 		var base := Vector3(cos(a) * r, y, sin(a) * r)
 		mm.set_instance_transform(i, Transform3D(Basis(), base))
@@ -1781,8 +1794,8 @@ func remove_shield(node: Node3D) -> void:
 func _build_dice() -> void:
 	_dice = Node3D.new()
 	_dice.name = "Dice"
-	_dice.position = DICE_HOME
-	_dice.scale = Vector3(0.95, 0.95, 0.95)
+	_dice.position = _dice_home
+	_dice.scale = Vector3(0.82, 0.82, 0.82)
 	add_child(_dice)
 
 	var body := MeshInstance3D.new()
@@ -1880,10 +1893,10 @@ func roll_dice(value: int) -> void:
 
 	var back := create_tween()
 	back.set_parallel(true)
-	back.tween_property(_dice, "position", DICE_HOME, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	back.tween_property(_dice, "position", _dice_home, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	back.tween_property(_dice, "rotation", Vector3(0.0, rest.y, 0.0), 0.5)
 	await back.finished
-	_dice.position = DICE_HOME
+	_dice.position = _dice_home
 	_rolling = false
 
 
