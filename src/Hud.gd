@@ -82,7 +82,7 @@ func _build_vignette() -> void:
 	var sh := Shader.new()
 	sh.code = """
 shader_type canvas_item;
-uniform float strength = 0.62;
+uniform float strength = 0.44;
 void fragment() {
 	vec2 uv = UV - vec2(0.5);
 	float d = length(uv * vec2(1.0, 0.82));
