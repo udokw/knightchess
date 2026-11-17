@@ -149,6 +149,59 @@ def amb_ember():
     return loopify(normalize(out, 0.62))
 
 
+def amb_jade():
+    """翠玉遗迹：竹风 + 五声音阶风铃 + 低沉玉磬。"""
+    n = int(8.0 * RATE)
+    out = pad_loop(8.0, [
+        (98.0, 0.13, 0.4, 0.06),
+        (146.83, 0.10, -0.4, 0.05),
+        (196.0, 0.07, 0.6, 0.04),
+        (293.66, 0.04, -0.5, 0.03),
+    ])
+    breeze = lowpass(noise(n, 0.06), 0.35)
+    rnd = random.Random(2026)
+    chimes = []
+    for _ in range(26):
+        chimes.append((rnd.uniform(0.0, 7.7), rnd.choice([523.25, 587.33, 659.25, 783.99, 880.0]),
+                       rnd.uniform(0.5, 1.6)))
+    for i in range(n):
+        t = i / RATE
+        out[i] += breeze[i] * 0.07 * (0.55 + 0.45 * math.sin(math.tau * 0.07 * t))
+        for ct, cf, dur in chimes:
+            dt = t - ct
+            if 0.0 <= dt <= dur:
+                env = math.exp(-dt * 5.5) * (1.0 - dt / dur)
+                out[i] += 0.055 * env * (math.sin(math.tau * cf * dt) + 0.3 * math.sin(math.tau * cf * 2.01 * dt))
+    out = lowpass(out, 0.72)
+    return loopify(normalize(out, 0.52))
+
+
+def amb_void():
+    """虚空星海：深空低频嗡鸣 + 缓慢上浮的闪烁泛音。"""
+    n = int(8.0 * RATE)
+    out = pad_loop(8.0, [
+        (41.20, 0.20, 0.2, 0.03),
+        (61.74, 0.13, -0.2, 0.04),
+        (82.41, 0.08, 0.3, 0.05),
+        (123.47, 0.05, -0.3, 0.03),
+    ])
+    air = noise(n, 0.15)
+    rnd = random.Random(3141)
+    shimmer = [(rnd.uniform(0.0, 8.0), rnd.choice([1244.5, 1661.2, 1864.7, 2349.3]),
+                rnd.uniform(0.8, 2.6)) for _ in range(16)]
+    for i in range(n):
+        t = i / RATE
+        out[i] += air[i] * 0.06 * (0.4 + 0.6 * math.sin(math.tau * 0.04 * t))
+        out[i] += 0.02 * math.sin(math.tau * 55.0 * t) * (0.5 + 0.5 * math.sin(math.tau * 0.11 * t))
+        for st, sf, dur in shimmer:
+            dt = t - st
+            if 0.0 <= dt <= dur:
+                env = math.exp(-dt * 2.2) * (1.0 - dt / dur)
+                out[i] += 0.03 * env * math.sin(math.tau * sf * dt)
+    out = lowpass(out, 0.8)
+    return loopify(normalize(out, 0.5))
+
+
 def sfx_explosion(name, seconds, low, bright, tail):
     n = int(seconds * RATE)
     rnd = random.Random(31)
@@ -235,6 +288,8 @@ def main():
     write_wav("amb_dusk.wav", amb_dusk())
     write_wav("amb_frost.wav", amb_frost())
     write_wav("amb_ember.wav", amb_ember())
+    write_wav("amb_jade.wav", amb_jade())
+    write_wav("amb_void.wav", amb_void())
     write_wav("sfx_event.wav", sfx_event())
     write_wav("sfx_bigboom.wav", sfx_bigboom())
     write_wav("sfx_roulette.wav", sfx_roulette())

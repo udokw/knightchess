@@ -7,6 +7,7 @@ config/name="骑士飞行棋3 - Godot复刻"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.3", "Mobile")
 config/icon="res://icon.png"
+run/max_fps=30
 
 [display]
 
@@ -29,5 +30,9 @@ renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
 textures/compression/compress_with_gpu=true
 textures/vram_compression/import_etc2_astc=true
-anti_aliasing/quality/msaa_3d=2
-textures/default_filters/anisotropic_filtering_level=3
+; 移动端发热优化：关闭 3D MSAA，纹理过滤降一档
+anti_aliasing/quality/msaa_3d=0
+textures/default_filters/anisotropic_filtering_level=1
+; 3D 渲染分辨率 85%（HUD 保持清晰），进一步降低 GPU 负载 / 发热 / 耗电
+scaling_3d/scale=0.85
+environment/defaults/default_clear_color=Color(0.03, 0.04, 0.07, 1)

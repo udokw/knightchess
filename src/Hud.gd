@@ -13,16 +13,16 @@ signal start_pressed(mode: int, level: int, theme_id: String, cells: int, styles
 signal theme_previewed(theme_id: String)
 signal theme_selected(theme_id: String)
 signal sound_toggled(on: bool)
-signal roulette_spun(index: int)
+signal roulette_done(index: int)
 signal roulette_tick
-signal roulette_requested
 
 const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
 const DIM := Color("98a3b8")
 
-const THEME_IDS := ["dusk", "frost", "ember"]
-const THEME_NAMES := ["暮色竞技场", "霜封荒原", "熔火深渊"]
+const THEME_IDS := ["dusk", "frost", "ember", "jade", "void"]
+const THEME_NAMES := ["暮色竞技场", "霜封荒原", "熔火深渊", "翠玉遗迹", "虚空星海"]
+const THEME_SHORT := ["暮色", "霜封", "熔火", "翠玉", "虚空"]
 
 const ITEM_INFO := {
 	"boost": ["加速", "+2 点数", Color("ff9a3c")],
@@ -40,6 +40,8 @@ const ITEM_INFO := {
 	"steal": ["窃取", "抢对手一张卡", Color("ffb84a")],
 	"bomb": ["炸弹", "把对手炸回基地", Color("ff6a3c")],
 	"gale": ["疾风", "+2 格并再掷一次", Color("8ff0c0")],
+	"jadeguard": ["玉灵护体", "己方全体获得护盾", Color("8ff0c0")],
+	"voidstep": ["虚空牵引", "随机放逐一枚敌子", Color("c8b8ff")],
 }
 
 const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵"]
@@ -47,8 +49,6 @@ const BOARD_SIZES := [28, 40, 52]
 const BOARD_SIZE_NAMES := ["小型 · 28 格", "标准 · 40 格", "大型 · 52 格"]
 
 var _root: Control
-var _hint_text: Label
-var _dice_label: Label
 var _log_panel: PanelContainer
 var _log_label: Label
 var _log_button: Button
@@ -58,7 +58,7 @@ var _menu_ring: Panel
 var _menu_open := false
 var _sound_on := true
 var _sound_button: Button
-var _theme_row: HBoxContainer
+var _theme_row: GridContainer
 var _theme_btns: Array = []
 var _team_chips: Array = []
 var _card_buttons: Array = []
@@ -72,9 +72,10 @@ var _pick_visible := true
 var _pick_toggle: Button
 var _last_options: Array = []
 var _last_hint := "选择一枚棋子"
-var _roulette_button: Button
 var _roulette_overlay: Control
 var _roulette_wheel: Wheel
+var _roulette_title: Label
+var _roulette_sub: Label
 var _roulette_result: Label
 var _roulette_spin_btn: Button
 var _roulette_segments: Array = []
@@ -129,7 +130,6 @@ func _ready() -> void:
 	_build_menu()
 	_build_teams()
 	_build_log()
-	_build_dice_hint()
 	_build_cards()
 	_build_pick()
 	_build_roulette()
@@ -335,11 +335,13 @@ func _build_menu() -> void:
 
 	vb.add_child(_spacer(4))
 	vb.add_child(_label("棋盘主题", 12, Color(1, 1, 1, 0.42)))
-	_theme_row = HBoxContainer.new()
-	_theme_row.add_theme_constant_override("separation", 5)
+	_theme_row = GridContainer.new()
+	_theme_row.columns = 3
+	_theme_row.add_theme_constant_override("h_separation", 5)
+	_theme_row.add_theme_constant_override("v_separation", 5)
 	vb.add_child(_theme_row)
-	for i in 3:
-		var b := _btn(["暮色", "霜封", "熔火"][i], Vector2(0, 32), 13)
+	for i in THEME_IDS.size():
+		var b := _btn(THEME_SHORT[i], Vector2(0, 32), 13)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var tid: String = THEME_IDS[i]
 		b.pressed.connect(func(): _pick_theme(tid))
@@ -454,40 +456,6 @@ func _toggle_log() -> void:
 	_log_button.text = "战 报 ▴" if _log_panel.visible else "战 报 ▾"
 
 
-# ---------------------------------------------------------------- 底部骰子提示
-
-func _build_dice_hint() -> void:
-	var holder := CenterContainer.new()
-	holder.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	holder.offset_top = -82.0 - _safe.w
-	holder.offset_bottom = -18.0 - _safe.w
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(holder)
-	_game_nodes.append(holder)
-
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(300, 0)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.06, 0.10, 0.62), 20, Color(1, 1, 1, 0.07)))
-	holder.add_child(panel)
-
-	var vb := VBoxContainer.new()
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.add_theme_constant_override("separation", 0)
-	panel.add_child(vb)
-
-	_hint_text = _label("点击棋盘中央的骰子投掷", 15, GOLD)
-	_hint_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hint_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.add_child(_hint_text)
-
-	_dice_label = _label("点数  —", 11, Color(1, 1, 1, 0.5))
-	_dice_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_dice_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.add_child(_dice_label)
-
-
 # ---------------------------------------------------------------- 右下角道具
 
 func _build_cards() -> void:
@@ -582,25 +550,6 @@ func _build_pick() -> void:
 # ---------------------------------------------------------------- 俄罗斯轮盘
 
 func _build_roulette() -> void:
-	_roulette_button = _btn("俄 罗 斯 轮 盘", Vector2(176, 46), 15)
-	_roulette_button.anchor_top = 1.0
-	_roulette_button.anchor_bottom = 1.0
-	_roulette_button.offset_left = 20.0 + _safe.x
-	_roulette_button.offset_right = 196.0 + _safe.x
-	_roulette_button.offset_top = -128.0 - _safe.w
-	_roulette_button.offset_bottom = -82.0 - _safe.w
-	_roulette_button.add_theme_stylebox_override("normal", _btn_style(Color(0.22, 0.14, 0.05, 0.9), GOLD, 16))
-	_roulette_button.add_theme_stylebox_override("hover", _btn_style(Color(0.34, 0.22, 0.07, 0.96), Color("ffe0a0"), 16))
-	_roulette_button.add_theme_color_override("font_color", Color("ffe0a0"))
-	_roulette_button.pressed.connect(_on_roulette_button)
-	_root.add_child(_roulette_button)
-	_game_nodes.append(_roulette_button)
-
-	var halo := create_tween()
-	halo.set_loops()
-	halo.tween_property(_roulette_button, "modulate", Color(1.0, 0.9, 0.7, 0.8), 1.1)
-	halo.tween_property(_roulette_button, "modulate", Color.WHITE, 1.1)
-
 	_roulette_overlay = Control.new()
 	_roulette_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_roulette_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -627,12 +576,12 @@ func _build_roulette() -> void:
 	vb.add_theme_constant_override("separation", 8)
 	card.add_child(vb)
 
-	var title := _label("俄 罗 斯 轮 盘", 30, GOLD)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(title)
-	var sub := _label("命运之轮 · 掷出你的运气", 12, Color(1, 1, 1, 0.45))
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(sub)
+	_roulette_title = _label("俄 罗 斯 轮 盘", 30, GOLD)
+	_roulette_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_roulette_title)
+	_roulette_sub = _label("命运之轮 · 掷出你的运气", 12, Color(1, 1, 1, 0.45))
+	_roulette_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_roulette_sub)
 
 	var wheel_holder := Control.new()
 	wheel_holder.custom_minimum_size = Vector2(360, 360)
@@ -654,43 +603,37 @@ func _build_roulette() -> void:
 	pointer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wheel_holder.add_child(pointer)
 
-	_roulette_result = _label("点击下方按钮转动命运之轮", 15, Color(0.9, 0.94, 1.0, 0.85))
+	_roulette_result = _label("踩中道具格 / 事件格，转动命运之轮", 15, Color(0.9, 0.94, 1.0, 0.85))
 	_roulette_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_roulette_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(_roulette_result)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	vb.add_child(row)
-	_roulette_spin_btn = _btn("开 始 旋 转", Vector2(0, 50), 20)
-	_roulette_spin_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_roulette_spin_btn = _btn("开 始 旋 转", Vector2(0, 52), 20)
 	_roulette_spin_btn.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 14))
 	_roulette_spin_btn.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
 	_roulette_spin_btn.add_theme_stylebox_override("pressed", _btn_style(Color("b5863f"), Color("ffe0a0"), 14))
 	_roulette_spin_btn.add_theme_color_override("font_color", Color("1a1206"))
 	_roulette_spin_btn.pressed.connect(_spin_roulette)
-	row.add_child(_roulette_spin_btn)
+	vb.add_child(_roulette_spin_btn)
 
-	var close := _btn("离 开", Vector2(120, 50), 16)
-	close.pressed.connect(hide_roulette)
-	row.add_child(close)
-
-	var hint := _label("轮盘只会选中你已拾取的道具，其余扇区会触发全屏随机事件", 11, Color(1, 1, 1, 0.38))
+	var hint := _label("轮盘是强制抽取：转到什么就拿什么", 11, Color(1, 1, 1, 0.38))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint)
 
 
-func _on_roulette_button() -> void:
-	roulette_requested.emit()
-
-
-## 工具栏 / 外部入口：显示轮盘（由 Main 传入扇区）
-func show_roulette(segments: Array) -> void:
+## 显示轮盘：kind = "item"（道具轮盘） / "event"（事件轮盘）
+func show_roulette(segments: Array, kind := "item") -> void:
 	_roulette_segments = segments
+	_roulette_spinning = false
+	if kind == "event":
+		_roulette_title.text = "命 运 事 件 轮 盘"
+		_roulette_sub.text = "全屏事件 · 转到什么就发生什么"
+	else:
+		_roulette_title.text = "道 具 轮 盘"
+		_roulette_sub.text = "随机道具 · 转到什么就拿到什么"
 	_roulette_result.text = "点击下方按钮转动命运之轮"
 	_roulette_result.add_theme_color_override("font_color", Color(0.9, 0.94, 1.0, 0.85))
 	_roulette_spin_btn.disabled = false
-	_roulette_spinning = false
 	_roulette_wheel.labels.clear()
 	_roulette_wheel.colors.clear()
 	for s in segments:
@@ -707,11 +650,20 @@ func show_roulette(segments: Array) -> void:
 	pop.tween_property(_roulette_wheel, "scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
+## 外部（AI 回合 / 自动演示）调用
+func spin_roulette() -> void:
+	_spin_roulette()
+
+
 func hide_roulette() -> void:
+	var was_spinning := _roulette_spinning
 	_roulette_spinning = false
 	if _roulette_tween and _roulette_tween.is_valid():
 		_roulette_tween.kill()
 	_roulette_overlay.visible = false
+	# 若在旋转途中被关闭（例如重开对局），通知等待方结束本次抽取，避免协程永久挂起
+	if was_spinning:
+		roulette_done.emit(-1)
 
 
 func _spin_roulette() -> void:
@@ -750,7 +702,7 @@ func _roulette_reveal(idx: int) -> void:
 	_roulette_result.scale = Vector2(1.3, 1.3)
 	pop.tween_property(_roulette_result, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	await get_tree().create_timer(0.8).timeout
-	roulette_spun.emit(idx)
+	roulette_done.emit(idx)
 
 
 # ---------------------------------------------------------------- 播报 / 事件
@@ -884,12 +836,12 @@ func _build_start() -> void:
 		level_row.add_child(b2)
 		_level_buttons.append(b2)
 
-	vb.add_child(_label("棋盘主题（每个主题拥有独占道具与事件）", 13, DIM))
+	vb.add_child(_label("棋盘主题（5 套主题 · 各自独占道具与事件）", 13, DIM))
 	var theme_row := HBoxContainer.new()
-	theme_row.add_theme_constant_override("separation", 10)
+	theme_row.add_theme_constant_override("separation", 8)
 	vb.add_child(theme_row)
-	for i in 3:
-		var b3 := _btn(THEME_NAMES[i], Vector2(0, 40), 15)
+	for i in THEME_IDS.size():
+		var b3 := _btn(THEME_NAMES[i], Vector2(0, 40), 13)
 		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var tid: String = THEME_IDS[i]
 		b3.pressed.connect(func(): _select_theme(tid))
@@ -942,7 +894,7 @@ func _build_start() -> void:
 	go.pressed.connect(_start_clicked)
 	vb.add_child(go)
 
-	var hint := _label("15 种道具 · 14 种随机事件 · 俄罗斯轮盘 · 棋盘随机掉落", 12, Color(1, 1, 1, 0.45))
+	var hint := _label("17 种道具 · 16 种随机事件 · 踩格触发轮盘 · 随机掉落", 12, Color(1, 1, 1, 0.45))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint)
 	var hint2 := _label("单指拖动旋转 · 双指捏合缩放 / 平移 · 点击骰子投掷 · 点棋子走子", 11, Color(1, 1, 1, 0.32))
@@ -1083,6 +1035,7 @@ func show_start() -> void:
 	_toast.modulate.a = 0.0
 	hide_win()
 	hide_pick()
+	hide_roulette()
 
 
 func hide_start() -> void:
@@ -1106,29 +1059,14 @@ func set_turn(text: String, color: Color) -> void:
 	_turn_text = text
 	_turn_short = text.replace("当前回合：", "")
 	_turn_color = color
-	_hint_text.add_theme_color_override("font_color", color.lightened(0.35))
-	_refresh_hint()
 
 
-func _refresh_hint() -> void:
-	if _hint_override != "":
-		_hint_text.text = _hint_override
-	else:
-		_hint_text.text = "点击骰子投掷 · " + _turn_short
+func set_dice(_value: int, _total := 0) -> void:
+	pass
 
 
-func set_dice(value: int, total := 0) -> void:
-	if value <= 0:
-		_dice_label.text = "点数  —"
-	elif total > value:
-		_dice_label.text = "点数  %d  + %d  =  %d" % [value, total - value, total]
-	else:
-		_dice_label.text = "点数  %d" % value
-
-
-func set_roll_enabled(on: bool, text := "") -> void:
+func set_roll_enabled(_on: bool, text := "") -> void:
 	_hint_override = text
-	_refresh_hint()
 
 
 func set_teams(status: Array) -> void:

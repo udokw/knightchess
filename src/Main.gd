@@ -16,6 +16,7 @@ const ITEM_NAMES := {
 	"swap": "换位", "freeze": "冰冻", "double": "双倍", "teleport": "传送",
 	"moonstep": "月影跃步", "frostlock": "极寒锁链", "inferno": "熔火冲锋",
 	"vortex": "漩涡", "steal": "窃取", "bomb": "炸弹", "gale": "疾风",
+	"jadeguard": "玉灵护体", "voidstep": "虚空牵引",
 }
 const ITEM_DESC := {
 	"boost": "本回合点数 +2", "shield": "免疫一次吃子", "warp": "前进 3 格",
@@ -25,6 +26,7 @@ const ITEM_DESC := {
 	"inferno": "前进 4 格，落点附近对手全被炸退",
 	"vortex": "所有对手棋子后退 1 格", "steal": "从道具最多的对手手中抢一张",
 	"bomb": "把一名对手棋子炸回基地", "gale": "前进 2 格并再掷一次",
+	"jadeguard": "己方在场棋子全部获得护盾", "voidstep": "随机放逐一枚对手棋子回基地",
 }
 const ITEM_COLORS := {
 	"boost": Color("ff9a3c"), "shield": Color("6cc6ff"), "warp": Color("b484ff"),
@@ -32,7 +34,7 @@ const ITEM_COLORS := {
 	"double": Color("ffe066"), "teleport": Color("7cf0a8"),
 	"moonstep": Color("cfd8ff"), "frostlock": Color("a8e6ff"), "inferno": Color("ff7a3c"),
 	"vortex": Color("9a7bff"), "steal": Color("ffb84a"), "bomb": Color("ff6a3c"),
-	"gale": Color("8ff0c0"),
+	"gale": Color("8ff0c0"), "jadeguard": Color("8ff0c0"), "voidstep": Color("c8b8ff"),
 }
 ## 共同道具池 + 每个主题的独占道具
 const ITEM_POOL := [
@@ -41,6 +43,7 @@ const ITEM_POOL := [
 ]
 const THEME_ITEM := {
 	"dusk": "moonstep", "frost": "frostlock", "ember": "inferno",
+	"jade": "jadeguard", "void": "voidstep",
 }
 
 const EVENT_TITLES := {
@@ -48,6 +51,7 @@ const EVENT_TITLES := {
 	"portal": "传送门", "chaos": "混 沌", "bless": "祝 福",
 	"starlight": "星辉之赐", "blizzard": "暴风雪", "eruption": "火山喷发",
 	"ambush": "伏 击", "goldrain": "金 雨", "earthquake": "地 震", "curse": "诅 咒",
+	"jadeserpent": "翠 蛇 缠 绕", "voidrift": "虚 空 裂 隙",
 }
 const EVENT_COLORS := {
 	"treasure": Color("ffd166"), "meteor": Color("ff6a3c"), "tailwind": Color("7cf0a8"),
@@ -55,13 +59,14 @@ const EVENT_COLORS := {
 	"bless": Color("6cc6ff"),
 	"starlight": Color("e8ecff"), "blizzard": Color("a8e6ff"), "eruption": Color("ff8a3c"),
 	"ambush": Color("ff7a92"), "goldrain": Color("ffd166"), "earthquake": Color("c9a06a"),
-	"curse": Color("b98cff"),
+	"curse": Color("b98cff"), "jadeserpent": Color("8ff0c0"), "voidrift": Color("c8b8ff"),
 }
 const EVENT_SYMBOLS := {
 	"treasure": "宝", "meteor": "陨", "tailwind": "风", "trap": "陷",
 	"portal": "门", "chaos": "混", "bless": "福",
 	"starlight": "星", "blizzard": "雪", "eruption": "火",
 	"ambush": "伏", "goldrain": "金", "earthquake": "震", "curse": "咒",
+	"jadeserpent": "蛇", "voidrift": "裂",
 }
 const EVENT_POOL := [
 	"treasure", "meteor", "tailwind", "trap", "portal", "chaos", "bless",
@@ -70,6 +75,11 @@ const EVENT_POOL := [
 ## 每个主题额外加入的独占事件
 const THEME_EVENT := {
 	"dusk": "starlight", "frost": "blizzard", "ember": "eruption",
+	"jade": "jadeserpent", "void": "voidrift",
+}
+const THEME_LABELS := {
+	"dusk": "暮色竞技场", "frost": "霜封荒原", "ember": "熔火深渊",
+	"jade": "翠玉遗迹", "void": "虚空星海",
 }
 
 var base_points: Dictionary = {}
@@ -78,9 +88,9 @@ var char_styles: Array = [0, 1, 2, 3]
 var drops: Dictionary = {}
 var event_cells: Dictionary = {}
 var turn_count := 0
-var roulette_used := false
 var roulette_open := false
 var _roulette_segments: Array = []
+var six_streak := 0
 
 var data: Dictionary = {}
 var pts: Dictionary = {}
@@ -145,6 +155,8 @@ var _amb_streams: Dictionary = {}
 
 
 func _ready() -> void:
+	# 移动端省电：锁 30 帧，配合关闭实时阴影与减半粒子，长时间对局也不烫手
+	Engine.max_fps = 30
 	var all_args: Array = []
 	all_args.append_array(OS.get_cmdline_args())
 	all_args.append_array(OS.get_cmdline_user_args())
@@ -188,8 +200,8 @@ func _ready() -> void:
 			hud._toggle_log()
 		if all_args.has("--wheel"):
 			roulette_open = true
-			_roulette_segments = _build_roulette_segments()
-			hud.show_roulette(_roulette_segments)
+			_roulette_segments = _build_roulette_segments("item")
+			hud.show_roulette(_roulette_segments, "item")
 			await get_tree().create_timer(0.9).timeout
 		if all_args.has("--blast"):
 			var bc: Color = arena.theme_accent()
@@ -251,11 +263,16 @@ func _apply_board_size(n: int) -> void:
 		ring_index[ring[i]] = i
 
 
+## 棋盘整体缩放：格数越多竞技台越大（28 → 0.7 倍，52 → 1.3 倍）
+func _board_scale() -> float:
+	return float(FIELDS) / float(BASE_FIELDS)
+
+
 func _setup_world() -> void:
 	arena = Arena.new()
 	arena.name = "Arena"
 	add_child(arena)
-	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0 * 40.0 / float(FIELDS))
+	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0, _board_scale())
 
 
 func _rebuild_arena() -> void:
@@ -269,7 +286,7 @@ func _rebuild_arena() -> void:
 	arena = Arena.new()
 	arena.name = "Arena"
 	add_child(arena)
-	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0 * 40.0 / float(FIELDS))
+	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0, _board_scale())
 	arena.set_active_team(current_team)
 	_spawn_pieces(char_styles)
 
@@ -288,6 +305,15 @@ func _setup_camera() -> void:
 	camera.near = 2.0
 	camera.far = 14000.0
 	add_child(camera)
+	_fit_camera()
+
+
+## 相机默认取景：棋盘越大，竞技台在屏幕上越大（52 格会略微超出画面，可双指缩放/拖动）
+func _fit_camera() -> void:
+	cam_yaw = deg_to_rad(34.0)
+	cam_pitch = deg_to_rad(52.0)
+	cam_dist = 2860.0
+	cam_target = Vector3(0, -60.0, 0)
 	_update_camera()
 
 
@@ -314,6 +340,8 @@ func _setup_audio() -> void:
 		"dusk": load("res://assets/sounds/amb_dusk.wav"),
 		"frost": load("res://assets/sounds/amb_frost.wav"),
 		"ember": load("res://assets/sounds/amb_ember.wav"),
+		"jade": load("res://assets/sounds/amb_jade.wav"),
+		"void": load("res://assets/sounds/amb_void.wav"),
 	}
 	for k in _amb_streams.keys():
 		_prepare_loop(_amb_streams[k])
@@ -382,8 +410,6 @@ func _setup_hud() -> void:
 	hud.card_pressed.connect(_on_card_pressed)
 	hud.piece_pressed.connect(_on_piece_pressed)
 	hud.start_pressed.connect(_start_match)
-	hud.roulette_requested.connect(_on_roulette_requested)
-	hud.roulette_spun.connect(_on_roulette_spun)
 	hud.roulette_tick.connect(func(): _play(sfx_tick))
 	hud.theme_previewed.connect(func(id: String): arena.set_theme(id))
 	hud.theme_selected.connect(func(id: String):
@@ -414,6 +440,7 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	elif styles_changed:
 		_rebuild_pieces()
 	arena.set_theme(theme_id)
+	_fit_camera()
 	human_teams = [0] if mode == 0 else [0, 1, 2, 3]
 	match_started = true
 	game_over = false
@@ -431,7 +458,7 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	last_dice = 0
 	current_team = 0
 	turn_count = 0
-	roulette_used = false
+	six_streak = 0
 	roulette_open = false
 	_roulette_segments = []
 	cards = [[], [], [], []]
@@ -460,19 +487,16 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	_seed_random_marks()
 	_update_all()
 	_log("———— 新对局 ————")
-	_log("主题：%s · 棋盘：%d 格" % [["暮色竞技场", "霜封荒原", "熔火深渊"][["dusk", "frost", "ember"].find(theme_id)], FIELDS])
+	_log("主题：%s · 棋盘：%d 格" % [String(THEME_LABELS.get(theme_id, "暮色竞技场")), FIELDS])
 	_log("掷出 6 点出基地，精确点数进终点")
+	_log("踩中道具格 / 事件格会自动开启俄罗斯轮盘，转出什么拿什么")
 	if mode == 0:
 		_log("AI 难度：%s" % ["简单", "普通", "困难"][ai_level])
 	_maybe_ai_turn()
 
 
 func _reset_view() -> void:
-	cam_yaw = deg_to_rad(34.0)
-	cam_pitch = deg_to_rad(52.0)
-	cam_dist = 2780.0
-	cam_target = Vector3(0, -60, 0)
-	_update_camera()
+	_fit_camera()
 
 
 # ---------------------------------------------------------------- 棋盘工具
@@ -554,6 +578,15 @@ func _is_portal_cell(cell: int) -> bool:
 
 func _is_thorn_cell(cell: int) -> bool:
 	return cell >= 0 and cell % _cell_step() == _cell_step() * 7 / 10
+
+
+## 固定道具拾取格：每两段出现一次（整盘约 2 个），踩中即开道具轮盘
+func _is_item_cell(cell: int) -> bool:
+	if cell < 0:
+		return false
+	var step := _cell_step()
+	var quarter: int = cell / step
+	return quarter % 2 == 0 and cell % step == step * 2 / 10
 
 
 func _resolve_capture(p: Dictionary) -> bool:
@@ -693,6 +726,24 @@ func _do_roll() -> void:
 	pending_total = total
 	hud.set_dice(raw, total)
 	_play(dice_player)
+	# 功能拓展：连续两次掷出 6 点触发「双六连击」，额外抽一张道具卡
+	if raw == 6:
+		six_streak += 1
+	else:
+		six_streak = 0
+	if six_streak >= 2:
+		six_streak = 0
+		var lead_i := _lead_piece(current_team)
+		var drop_pos := Vector3.ZERO
+		if lead_i >= 0:
+			var lp: Dictionary = pieces[lead_i]
+			drop_pos = Vector3(lp["node"].position.x, BOARD_Y, lp["node"].position.z)
+		if _draw_card(current_team, true, drop_pos):
+			hud.show_item_toast("双六连击", "%s 连续两次掷出 6 点，额外获得一张道具卡" % TEAM_NAMES[current_team],
+				Color("ffe066"))
+			hud.screen_flash(Color("ffe066"), 0.3)
+			_log("%s 连续两次掷出 6 点，额外抽到「%s」" % [TEAM_NAMES[current_team],
+				ITEM_NAMES.get(cards[current_team][cards[current_team].size() - 1], "道具")])
 	_log("%s 掷出 %d 点%s" % [_team_display(current_team), raw,
 		"（强化后 %d）" % total if total != raw else ""])
 	await arena.roll_dice(raw)
@@ -779,7 +830,7 @@ func _move_piece(idx: int, steps: int) -> void:
 	_finish_turn(last_dice == 6 or captured)
 
 
-## 落点结算：随机掉落 → 随机事件格 → 固定地形（秘宝/传送/荆棘/安全）
+## 落点结算：随机掉落 → 随机事件格 → 固定道具格 → 固定地形（秘宝/传送/荆棘/安全）
 func _on_land(p: Dictionary, depth: int) -> void:
 	if p["finished"] or p["cell"] < 0:
 		return
@@ -797,9 +848,14 @@ func _on_land(p: Dictionary, depth: int) -> void:
 			return
 	if p["cell"] < 0:
 		return
+	# 固定道具拾取格：转道具轮盘
+	if _is_item_cell(p["cell"]):
+		await _run_roulette("item", p)
+		if p["finished"] or p["cell"] < 0:
+			return
 	var cell: int = p["cell"]
 	if _is_treasure_cell(cell):
-		await _trigger_event(p)
+		await _run_roulette("event", p)
 		if p["finished"] or p["cell"] < 0:
 			return
 	if _is_portal_cell(p["cell"]):
@@ -828,16 +884,14 @@ func _collect_drop(p: Dictionary, ri: int) -> void:
 	if info.has("node"):
 		arena.remove_drop(info["node"])
 	var pos: Vector3 = p["node"].position
-	var got := _draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))
 	arena.item_pickup(Vector3(pos.x, BOARD_Y, pos.z), Color("ffe066"))
 	arena.piece_celebrate(p["node"])
 	_play(sfx_drop)
 	hud.screen_flash(Color("ffe066"), 0.16)
-	if not got:
-		hud.show_item_toast("掉 落", "%s 卡槽已满，道具化为尘光" % TEAM_NAMES[p["team"]], Color("ffe066"))
-	_log("%s 拾取了随机掉落的道具" % TEAM_NAMES[p["team"]])
-	await get_tree().create_timer(0.45).timeout
-	if drops.size() < 2:
+	_log("%s 拾取了随机掉落的宝箱，转动道具轮盘" % TEAM_NAMES[p["team"]])
+	await _run_roulette("item", p)
+	await get_tree().create_timer(0.15).timeout
+	if drops.size() < 3:
 		_spawn_random_drop()
 
 
@@ -846,9 +900,11 @@ func _consume_event_cell(p: Dictionary, ri: int) -> void:
 	event_cells.erase(ri)
 	if info.has("node"):
 		arena.remove_event_cell(info["node"])
-	var forced: String = String(info.get("id", ""))
-	await _trigger_event(p, forced, false)
-	if event_cells.size() < 2:
+	arena.event_ring(p["node"].position, arena.theme_accent())
+	_log("%s 踩中命运之格，转动事件轮盘" % TEAM_NAMES[p["team"]])
+	await _run_roulette("event", p)
+	await get_tree().create_timer(0.15).timeout
+	if event_cells.size() < 3:
 		_spawn_random_event_cell()
 
 
@@ -894,6 +950,8 @@ func _random_free_ring() -> int:
 			continue
 		if _is_safe_cell(i) or _is_treasure_cell(i) or _is_portal_cell(i) or _is_thorn_cell(i):
 			continue
+		if _is_item_cell(i):
+			continue
 		candidates.append(i)
 	if candidates.is_empty():
 		return -1
@@ -926,17 +984,18 @@ func _spawn_random_event_cell(forced := "") -> void:
 	event_cells[ri] = {"node": node, "id": id}
 
 
-## 回合开始按概率随机补充掉落与事件格
+## 每个回合开始都随机补充掉落与事件格：随机回合 → 随机空格
 func _maybe_spawn_random() -> void:
-	if randf() < 0.55:
+	if randf() < 0.7:
 		_spawn_random_drop()
-	if randf() < 0.45:
+	if randf() < 0.55:
 		_spawn_random_event_cell()
-	if randf() < 0.20:
+	if randf() < 0.28:
 		_spawn_random_event_cell()
 
 
 func _seed_random_marks() -> void:
+	_spawn_random_drop()
 	_spawn_random_drop()
 	_spawn_random_drop()
 	_spawn_random_event_cell()
@@ -966,7 +1025,6 @@ func _finish_turn(extra: bool) -> void:
 	else:
 		current_team = (current_team + 1) % 4
 		_skip_frozen()
-		roulette_used = false
 		turn_count += 1
 		_maybe_spawn_random()
 	hud.set_dice(0)
@@ -1015,7 +1073,8 @@ func _on_card_pressed(slot: int) -> void:
 	if slot < 0 or slot >= cards[current_team].size():
 		return
 	var id: String = cards[current_team][slot]
-	if id == "boost" or id == "double" or id == "freeze" or id == "vortex" or id == "steal":
+	if id == "boost" or id == "double" or id == "freeze" or id == "vortex" or id == "steal" \
+			or id == "jadeguard" or id == "voidstep":
 		_use_instant_card(slot, id)
 		return
 
@@ -1133,6 +1192,49 @@ func _use_instant_card(slot: int, id: String) -> void:
 			hud.screen_flash(Color("ffb84a"), 0.26)
 			_log("%s 使用「窃取」，从 %s 手中抢到「%s」" % [TEAM_NAMES[current_team],
 				TEAM_NAMES[victim_t], ITEM_NAMES.get(got, got)])
+		"jadeguard":
+			cards[current_team].remove_at(slot)
+			var shielded := 0
+			for q in pieces:
+				if q["team"] != current_team or q["finished"] or q["cell"] < 0:
+					continue
+				if q["shield"]:
+					continue
+				q["shield"] = true
+				arena.add_shield(q["node"])
+				arena.item_aura(q["node"], Color("8ff0c0"))
+				shielded += 1
+			arena.event_ring(Vector3(0, BOARD_Y, 0), Color("8ff0c0"))
+			desc_line = "己方 %d 枚棋子披上翠玉护盾" % shielded
+			hud.screen_flash(Color("8ff0c0"), 0.3)
+			_log("%s 使用「玉灵护体」，%d 枚棋子获得护盾" % [TEAM_NAMES[current_team], shielded])
+		"voidstep":
+			var cands: Array = []
+			for i in pieces.size():
+				var q2: Dictionary = pieces[i]
+				if q2["team"] != current_team and not q2["finished"] and int(q2["cell"]) >= 0:
+					cands.append(i)
+			if cands.is_empty():
+				_play(nope_player)
+				hud.show_item_toast("虚空牵引失败", "没有可放逐的对手棋子", Color("c8b8ff"))
+				return
+			cards[current_team].remove_at(slot)
+			var victim2: Dictionary = pieces[cands[randi() % cands.size()]]
+			var vname := "%s%d号" % [TEAM_NAMES[int(victim2["team"])], int(victim2["idx"]) + 1]
+			var vpos := Vector3(victim2["node"].position.x, BOARD_Y, victim2["node"].position.z)
+			arena.capture_blast(vpos, Color("c8b8ff"))
+			arena.roulette_blast(vpos, Color("c8b8ff"))
+			if victim2["shield"]:
+				victim2["shield"] = false
+				arena.remove_shield(victim2["node"])
+				desc_line = "%s 的护盾被虚空吞噬，但保住了位置" % vname
+			else:
+				victim2["cell"] = -1
+				victim2["node"].position = _pt_pos("HM%d_%d" % [int(victim2["team"]) + 1, int(victim2["idx"]) + 1])
+				desc_line = "%s 被虚空裂隙吞没，回到基地" % vname
+			hud.screen_flash(Color("c8b8ff"), 0.34)
+			_shake(0.35, 20.0)
+			_log("%s 使用「虚空牵引」：%s" % [TEAM_NAMES[current_team], desc_line])
 	if leader >= 0:
 		var lp: Dictionary = pieces[leader]
 		arena.item_cast(lp["node"], c, id)
@@ -1653,6 +1755,42 @@ func _trigger_event(p: Dictionary, forced := "", dramatic := false) -> void:
 					dragged = back4
 			_shake(0.3, 16.0)
 			desc = "诅咒降临，%s 下一回合被冻结，领先棋子被拖后 %d 格" % [TEAM_NAMES[team], dragged]
+		"jadeserpent":
+			var bites := 0
+			for q in pieces:
+				if q["team"] == team or q["finished"] or q["cell"] <= 0:
+					continue
+				var back5 := mini(2, int(q["cell"]))
+				q["cell"] = int(q["cell"]) - back5
+				if q["shield"]:
+					q["shield"] = false
+					arena.remove_shield(q["node"])
+				arena.piece_hit(q["node"])
+				arena.freeze_burst(Vector3(q["node"].position.x, BOARD_Y, q["node"].position.z), color)
+				await _hop_to(q, _piece_cell_pos(q))
+				bites += 1
+			p["shield"] = true
+			arena.add_shield(p["node"])
+			_shake(0.3, 15.0)
+			desc = "翠蛇破土缠住 %d 枚对手棋子，全体后退 2 格；落点获得护盾" % bites
+		"voidrift":
+			var swallowed := 0
+			for q in pieces:
+				if q["finished"] or q["cell"] < 0:
+					continue
+				var d2 := randi_range(-3, 4)
+				if q["team"] == team:
+					d2 = absi(d2)
+				var before5: int = q["cell"]
+				q["cell"] = clampi(int(q["cell"]) + d2, 0, FIELDS - 2)
+				if q["cell"] == before5:
+					continue
+				arena.item_cast(q["node"], color, "teleport")
+				await _hop_to(q, _piece_cell_pos(q))
+				arena.capture_blast(Vector3(q["node"].position.x, BOARD_Y, q["node"].position.z), color)
+				swallowed += 1
+			_shake(0.5, 26.0)
+			desc = "虚空裂隙撕开棋盘，%d 枚棋子被空间乱流抛动" % swallowed
 
 	hud.show_event(title, desc, color)
 	_log("【%s】%s" % [title.replace(" ", ""), desc])
@@ -1687,6 +1825,8 @@ func _most_dangerous_opponent(team: int) -> int:
 
 
 # ---------------------------------------------------------------- 俄罗斯轮盘
+## 轮盘只在踩中「道具格 / 事件格」时自动开启：8 个扇区全是随机道具或随机事件，
+## 转到什么拿什么，不能跳过。
 
 func _roulette_event_pool() -> Array:
 	var pool: Array = EVENT_POOL.duplicate()
@@ -1697,48 +1837,98 @@ func _roulette_event_pool() -> Array:
 	return pool
 
 
-func _on_roulette_requested() -> void:
-	if not match_started or game_over:
-		return
-	if _is_ai(current_team):
-		_play(nope_player)
-		hud.show_item_toast("俄 罗 斯 轮 盘", "AI 回合不能转动命运之轮", Color("ffd166"))
-		return
-	if busy or awaiting_pick or card_mode != "":
-		_play(nope_player)
-		hud.show_item_toast("俄 罗 斯 轮 盘", "先完成当前操作再转动轮盘", Color("ffd166"))
-		return
-	if roulette_used:
-		_play(nope_player)
-		hud.show_item_toast("俄 罗 斯 轮 盘", "本回合已经转动过一次，等下一回合吧", Color("ffd166"))
-		return
-	roulette_open = true
-	_roulette_segments = _build_roulette_segments()
-	hud.show_roulette(_roulette_segments)
-	_play(click_player)
+func _roulette_item_pool() -> Array:
+	var pool: Array = ITEM_POOL.duplicate()
+	var ex: String = THEME_ITEM.get(theme_id, "")
+	if ex != "":
+		pool.append(ex)
+		pool.append(ex)
+	return pool
 
 
-func _build_roulette_segments() -> Array:
+func _build_roulette_segments(kind := "item") -> Array:
 	var segs: Array = []
-	var t := current_team
-	for i in cards[t].size():
-		if segs.size() >= 5:
+	var pool: Array = _roulette_item_pool() if kind == "item" else _roulette_event_pool()
+	var uniq: Array = []
+	for v in pool:
+		if not uniq.has(v):
+			uniq.append(v)
+	uniq.shuffle()
+	for id in uniq:
+		if segs.size() >= 8:
 			break
-		var id: String = cards[t][i]
-		segs.append({
-			"kind": "item", "id": id, "slot": i,
-			"label": ITEM_NAMES.get(id, id), "color": ITEM_COLORS.get(id, Color.WHITE),
-		})
-	var pool := _roulette_event_pool()
-	while segs.size() < 8:
-		var eid: String = pool[randi() % pool.size()]
-		segs.append({
-			"kind": "event", "id": eid, "slot": -1,
-			"label": String(EVENT_TITLES.get(eid, eid)).replace(" ", ""),
-			"color": EVENT_COLORS.get(eid, Color.WHITE),
-		})
+		if kind == "item":
+			segs.append({
+				"kind": "item", "id": id,
+				"label": String(ITEM_NAMES.get(id, id)),
+				"color": ITEM_COLORS.get(id, Color.WHITE),
+			})
+		else:
+			segs.append({
+				"kind": "event", "id": id,
+				"label": String(EVENT_TITLES.get(id, id)).replace(" ", ""),
+				"color": EVENT_COLORS.get(id, Color.WHITE),
+			})
+	while segs.size() < 8 and not segs.is_empty():
+		segs.append(segs[randi() % segs.size()])
 	segs.shuffle()
 	return segs
+
+
+## 踩格触发：开轮盘 → 等待旋转结果 → 发道具 / 触发全屏事件
+func _run_roulette(kind: String, p: Dictionary) -> void:
+	if game_over:
+		return
+	roulette_open = true
+	_roulette_segments = _build_roulette_segments(kind)
+	hud.show_roulette(_roulette_segments, kind)
+	_play(click_player)
+	if _is_ai(p["team"]) or auto_mode:
+		await get_tree().create_timer(0.6).timeout
+		hud.spin_roulette()
+	var idx: int = await hud.roulette_done
+	roulette_open = false
+	if idx < 0 or idx >= _roulette_segments.size():
+		_roulette_segments = []
+		hud.hide_roulette()
+		return
+	var seg: Dictionary = _roulette_segments[idx]
+	_roulette_segments = []
+	var id := String(seg.get("id", ""))
+	_log("【轮盘】%s 转出「%s」" % [TEAM_NAMES[p["team"]], String(seg.get("label", "?"))])
+	if kind == "item":
+		_grant_item(p, id)
+		await get_tree().create_timer(0.8).timeout
+		hud.hide_roulette()
+	else:
+		await get_tree().create_timer(0.55).timeout
+		hud.hide_roulette()
+		await _trigger_event(p, id, true)
+	await get_tree().create_timer(0.2).timeout
+
+
+## 轮盘抽中的道具直接进卡槽（满 4 张时替换最旧的一张）
+func _grant_item(p: Dictionary, id: String) -> void:
+	if not ITEM_NAMES.has(id):
+		return
+	var team: int = p["team"]
+	var replaced := false
+	if cards[team].size() >= 4:
+		cards[team].remove_at(0)
+		replaced = true
+	cards[team].append(id)
+	var col: Color = ITEM_COLORS.get(id, Color.WHITE)
+	var pos: Vector3 = p["node"].position
+	arena.item_pickup(Vector3(pos.x, BOARD_Y, pos.z), col)
+	arena.item_cast(p["node"], col, "item")
+	arena.piece_celebrate(p["node"])
+	hud.screen_flash(col, 0.26)
+	_play(sfx_drop)
+	var extra := "（卡槽已满，替换最旧的一张）" if replaced else ""
+	hud.show_item_toast("轮盘奖励 ·「%s」" % String(ITEM_NAMES[id]),
+		String(ITEM_DESC.get(id, "")) + extra, col)
+	_log("%s 获得道具「%s」%s" % [TEAM_NAMES[team], String(ITEM_NAMES[id]), extra])
+	_update_all()
 
 
 func _pick_event_piece(team: int) -> Dictionary:
@@ -1749,33 +1939,6 @@ func _pick_event_piece(team: int) -> Dictionary:
 		if p["team"] == team:
 			return p
 	return pieces[0]
-
-
-func _on_roulette_spun(idx: int) -> void:
-	roulette_open = false
-	roulette_used = true
-	hud.hide_roulette()
-	if idx < 0 or idx >= _roulette_segments.size():
-		_update_all()
-		return
-	var seg: Dictionary = _roulette_segments[idx]
-	_log("【轮盘】命运选中「%s」" % String(seg.get("label", "?")))
-	if String(seg.get("kind", "")) == "item":
-		var slot: int = int(seg.get("slot", -1))
-		if slot >= 0 and slot < cards[current_team].size():
-			_play(click_player)
-			_on_card_pressed(slot)
-		else:
-			_update_all()
-		return
-	# 命中事件：全屏炸裂演出
-	var target := _pick_event_piece(current_team)
-	await _trigger_event(target, String(seg.get("id", "")), true)
-	if game_over:
-		return
-	if card_mode != "" or busy:
-		return
-	_finish_turn(false)
 
 
 # ---------------------------------------------------------------- AI
@@ -2234,16 +2397,20 @@ func _try_world_pick(screen_pos: Vector2) -> void:
 	var dir := camera.project_ray_normal(screen_pos)
 	if absf(dir.y) < 0.0001:
 		return
-	var t := (BOARD_Y + 46.0 - origin.y) / dir.y
+	var s := _board_scale()
+	# 棋子随棋盘整体缩放，拾取平面与半径都按棋盘缩放换算
+	var hit_y := (BOARD_Y + 78.0) * s
+	var t := (hit_y - origin.y) / dir.y
 	if t <= 0.0:
 		return
 	var hit := origin + dir * t
 	var best := -1
-	var best_d := 88.0
+	var best_d := 88.0 * s
 	for i in _pick_pool:
 		var p: Dictionary = pieces[i]
 		var node: Node3D = p["node"]
-		var d := Vector2(node.position.x - hit.x, node.position.z - hit.z).length()
+		var wp := node.global_position
+		var d := Vector2(wp.x - hit.x, wp.z - hit.z).length()
 		if d < best_d:
 			best_d = d
 			best = i
@@ -2288,8 +2455,8 @@ func _handle_pinch() -> void:
 		var fwd := Vector3(-sin(cam_yaw), 0.0, -cos(cam_yaw))
 		var right := Vector3(cos(cam_yaw), 0.0, -sin(cam_yaw))
 		cam_target += (fwd * delta.y - right * delta.x) * k
-		cam_target.x = clampf(cam_target.x, -1500.0, 1500.0)
-		cam_target.z = clampf(cam_target.z, -1500.0, 1500.0)
+		cam_target.x = clampf(cam_target.x, -1600.0, 1600.0)
+		cam_target.z = clampf(cam_target.z, -1600.0, 1600.0)
 	_update_camera()
 	_pinch_dist = d
 	_pinch_mid = mid
@@ -2398,10 +2565,7 @@ func _setup_showcase() -> void:
 	_spawn_random_drop()
 	_spawn_random_event_cell()
 	_spawn_random_event_cell()
-	var extra_ids := ["starlight", "blizzard", "eruption"]
-	var eid: String = extra_ids[["dusk", "frost", "ember"].find(theme_id)]
-	if eid == "":
-		eid = "starlight"
+	var eid: String = String(THEME_EVENT.get(theme_id, "starlight"))
 	for ri in [2, 26]:
 		if event_cells.has(ri) or ri >= FIELDS:
 			continue

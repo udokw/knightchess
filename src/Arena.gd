@@ -61,6 +61,32 @@ const THEMES := {
 		"chevron": "c07038", "chevron_em": "ff9a3c",
 		"trim": "ffb84a", "motes": "ffb066",
 	},
+	"jade": {
+		"sky": "res://assets/textures/sky_jade.png", "sky_energy": 0.88,
+		"ambient": 0.34, "exposure": 0.98, "saturation": 1.10, "glow": 0.62,
+		"sun_color": "dcffd2", "sun_energy": 1.9, "sun_rot": Vector3(-50, -26, 0),
+		"fill_color": "58c88a", "fill_energy": 0.32,
+		"fog_color": "a6e2c2", "fog_energy": 0.46, "fog_density": 0.00006,
+		"center_color": "7cffb8", "center_energy": 2.1,
+		"stone_a": "a6c6ac", "stone_b": "8cae96", "stone_dark": "45604e", "deck": "526f5c",
+		"tint_a": 0.95, "tint_b": 0.95, "tint_dark": 0.88, "tint_deck": 0.72,
+		"gold": "cbbb72", "gold_em": "4f9b62",
+		"chevron": "7c9a6a", "chevron_em": "a8ff9a",
+		"trim": "a8ffd0", "motes": "d8ffe0",
+	},
+	"void": {
+		"sky": "res://assets/textures/sky_void.png", "sky_energy": 0.92,
+		"ambient": 0.26, "exposure": 0.90, "saturation": 1.16, "glow": 0.86,
+		"sun_color": "c0b0ff", "sun_energy": 1.35, "sun_rot": Vector3(-68, -44, 0),
+		"fill_color": "6a4fd8", "fill_energy": 0.42,
+		"fog_color": "7a6ac0", "fog_energy": 0.40, "fog_density": 0.00006,
+		"center_color": "a07cff", "center_energy": 2.6,
+		"stone_a": "72729a", "stone_b": "5c5c80", "stone_dark": "2c2a44", "deck": "26243a",
+		"tint_a": 0.95, "tint_b": 0.95, "tint_dark": 0.9, "tint_deck": 0.78,
+		"gold": "bcacec", "gold_em": "7c5cff",
+		"chevron": "6a5a9a", "chevron_em": "b8a0ff",
+		"trim": "c8b8ff", "motes": "e0d8ff",
+	},
 }
 
 var team_colors: Array = []
@@ -105,6 +131,7 @@ var _time := 0.0
 var _rolling := false
 var _dice_locked := false
 var _tile_size := TILE_SIZE
+var _board_scale := 1.0
 
 # 事件格 / 安全格 / 荆棘 / 传送 3D 标记
 var _chests: Array = []
@@ -126,10 +153,14 @@ const PIECE_STYLE_NAMES := [
 ]
 
 
-func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk", tile_size := TILE_SIZE) -> void:
+func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk",
+		tile_size := TILE_SIZE, board_scale := 1.0) -> void:
 	team_colors = colors
 	theme_id = theme if THEMES.has(theme) else "dusk"
 	_tile_size = tile_size
+	_board_scale = board_scale
+	# 棋盘格数越多，整块竞技台按比例放大（28 格 → 0.7 倍，52 格 → 1.3 倍）
+	scale = Vector3.ONE * board_scale
 	_build_environment()
 	_make_materials()
 	_build_platform()
@@ -298,10 +329,14 @@ func _build_environment() -> void:
 	env.glow_hdr_threshold = 0.85
 	env.set("glow_levels/2", 1.0)
 	env.set("glow_levels/3", 1.0)
-	env.set("glow_levels/4", 0.7)
+	env.set("glow_levels/4", 0.6)
 	env.adjustment_enabled = true
 	env.adjustment_saturation = th["saturation"]
 	env.adjustment_contrast = 1.08
+	env.ssao_enabled = false
+	env.ssil_enabled = false
+	env.sdfgi_enabled = false
+	env.volumetric_fog_enabled = false
 	env.fog_enabled = true
 	env.fog_light_color = Color(th["fog_color"])
 	env.fog_light_energy = th["fog_energy"]
@@ -316,8 +351,9 @@ func _build_environment() -> void:
 	sun.rotation_degrees = th["sun_rot"]
 	sun.light_energy = th["sun_energy"]
 	sun.light_color = Color(th["sun_color"])
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 3200.0
+	# 移动端发热优化：关闭实时阴影（场景本身靠辉光与自发光出层次）
+	sun.shadow_enabled = false
+	sun.directional_shadow_max_distance = 2400.0
 	add_child(sun)
 	_sun = sun
 
@@ -329,10 +365,10 @@ func _build_environment() -> void:
 	_fill_light = fill
 
 	var center_light := OmniLight3D.new()
-	center_light.position = Vector3(0, 260, 0)
+	center_light.position = Vector3(0, 260.0 * _board_scale, 0)
 	center_light.light_color = Color(th["center_color"])
 	center_light.light_energy = th["center_energy"]
-	center_light.omni_range = 900.0
+	center_light.omni_range = 900.0 * _board_scale
 	add_child(center_light)
 	_center_light = center_light
 
@@ -623,6 +659,13 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 	if n == 0:
 		return
 	var step: int = maxi(n / 4, 1)
+	# 环线格子尺寸按周长自适应：格数越多格子越小，配合 board_scale 让整盘真正变大/变小
+	var perim := 0.0
+	for i in n:
+		var pa := _pt(points, ring[i])
+		var pb := _pt(points, ring[(i + 1) % n])
+		perim += Vector2(pa.x - pb.x, pa.z - pb.z).length()
+	var ts: float = clampf(perim / float(n) * 0.96, 45.0, 180.0)
 	for i in n:
 		var p := _pt(points, ring[i])
 		var prev := _pt(points, ring[(i - 1 + n) % n])
@@ -643,22 +686,22 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 		var team := i / step
 		var is_start := i % step == 0
 		var base_mat := _stone_b if i % 2 == 0 else _stone_a
-		var slab := _add_box(tile, Vector3(_tile_size - 8.0, TILE_TOP, _tile_size - 8.0), Vector3(0, -TILE_TOP * 0.5, 0), base_mat)
+		var slab := _add_box(tile, Vector3(ts - 8.0, TILE_TOP, ts - 8.0), Vector3(0, -TILE_TOP * 0.5, 0), base_mat)
 		slab.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
 		# 金色凸框：让每一格从台面上清晰地"切"出来
-		var fw := 4.5
-		var edge := (_tile_size - fw) * 0.5
-		var rim_far := _add_box(tile, Vector3(_tile_size, 2.6, fw), Vector3(0, -0.4, edge), _gold)
-		var rim_near := _add_box(tile, Vector3(_tile_size, 2.6, fw), Vector3(0, -0.4, -edge), _gold)
-		var rim_left := _add_box(tile, Vector3(fw, 2.6, _tile_size - fw * 2.0), Vector3(-edge, -0.4, 0), _gold)
-		var rim_right := _add_box(tile, Vector3(fw, 2.6, _tile_size - fw * 2.0), Vector3(edge, -0.4, 0), _gold)
+		var fw := maxf(4.5, ts * 0.045)
+		var edge := (ts - fw) * 0.5
+		var rim_far := _add_box(tile, Vector3(ts, 2.6, fw), Vector3(0, -0.4, edge), _gold)
+		var rim_near := _add_box(tile, Vector3(ts, 2.6, fw), Vector3(0, -0.4, -edge), _gold)
+		var rim_left := _add_box(tile, Vector3(fw, 2.6, ts - fw * 2.0), Vector3(-edge, -0.4, 0), _gold)
+		var rim_right := _add_box(tile, Vector3(fw, 2.6, ts - fw * 2.0), Vector3(edge, -0.4, 0), _gold)
 		for r in [rim_far, rim_near, rim_left, rim_right]:
 			var rmi: MeshInstance3D = r
 			rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 缝隙下的暗色底
-		_add_box(tile, Vector3(_tile_size, 4.0, _tile_size), Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 0.0).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_add_box(tile, Vector3(ts, 4.0, ts), Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 0.0).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 方向箭头（尖端指向行进方向）
 		var local_yaw := wrapf(yaw_next - yaw_avg, -PI, PI)
@@ -667,10 +710,10 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 		chev.position.y = 0.8
 		tile.add_child(chev)
 		for side in [-1, 1]:
-			var bar := _add_box(chev, Vector3(_tile_size * 0.1, 2.4, _tile_size * 0.34), Vector3(_tile_size * 0.12 * side, 0, _tile_size * 0.03), _chevron, deg_to_rad(-32.0 * side))
+			var bar := _add_box(chev, Vector3(ts * 0.1, 2.4, ts * 0.34), Vector3(ts * 0.12 * side, 0, ts * 0.03), _chevron, deg_to_rad(-32.0 * side))
 			bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-		# 固定特殊地形：宝箱格 / 安全格 / 传送格 / 荆棘格
+		# 固定特殊地形：宝箱格 / 安全格 / 传送格 / 荆棘格 / 道具格
 		if i % step == step / 2:
 			_make_chest(tile)
 		elif i % step == 0:
@@ -679,10 +722,12 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 			_make_portal_pad(tile)
 		elif i % step == step * 7 / 10:
 			_make_thorn_pad(tile)
+		elif i % step == step * 2 / 10 and (i / step) % 2 == 0:
+			_make_item_pad(tile)
 
 		if is_start and team >= 0 and team < _team_glow.size():
-			_add_box(tile, Vector3(_tile_size - 22.0, 2.0, _tile_size - 22.0), Vector3(0, 0.4, 0), _team_soft[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var halo := _add_torus(tile, _tile_size * 0.34, _tile_size * 0.38, Vector3(0, 1.0, 0), _team_glow[team])
+			_add_box(tile, Vector3(ts - 22.0, 2.0, ts - 22.0), Vector3(0, 0.4, 0), _team_soft[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var halo := _add_torus(tile, ts * 0.34, ts * 0.38, Vector3(0, 1.0, 0), _team_glow[team])
 			halo.name = "StartHalo"
 
 
@@ -734,6 +779,43 @@ func _make_chest(tile: Node3D) -> void:
 	var sign_l := _billboard_label("？", Color("fff6dd"), 96.0)
 	sign_l.position = Vector3(0, 108.0, 0)
 	chest.add_child(sign_l)
+
+
+## 固定道具格：悬浮青色宝晶 + 光柱（踩中触发道具轮盘）
+func _make_item_pad(tile: Node3D) -> void:
+	var gem := Node3D.new()
+	gem.position.y = 30.0
+	tile.add_child(gem)
+	_chests.append(gem)
+	var crystal := MeshInstance3D.new()
+	var cm := PrismMesh.new()
+	cm.size = Vector3(34.0, 58.0, 34.0)
+	crystal.mesh = cm
+	crystal.material_override = _unshaded(Color("8ff0c0"), 2.4)
+	crystal.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gem.add_child(crystal)
+	var halo := _add_torus(tile, 24.0, 30.0, Vector3(0, 2.0, 0), _unshaded(Color("8ff0c0"), 1.9))
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	var beam := MeshInstance3D.new()
+	var bcm := CylinderMesh.new()
+	bcm.top_radius = 22.0
+	bcm.bottom_radius = 12.0
+	bcm.height = 240.0
+	bcm.radial_segments = 14
+	bcm.cap_top = false
+	bcm.cap_bottom = false
+	beam.mesh = bcm
+	var bm := _unshaded(Color("8ff0c0"), 1.2)
+	(bm as StandardMaterial3D).albedo_color = Color(0.56, 0.94, 0.75, 0.12)
+	beam.material_override = bm
+	beam.position.y = 84.0
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	tile.add_child(beam)
+
+	var sign_l := _billboard_label("道具", Color("dfffe8"), 70.0)
+	sign_l.position = Vector3(0, 96.0, 0)
+	gem.add_child(sign_l)
 
 
 ## 安全格：贴地的旋转金环 + 四枚小晶棱
@@ -1123,11 +1205,13 @@ func _build_center() -> void:
 
 
 func _build_motes() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7788
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.instance_count = 140
+	mm.instance_count = 90
 	var sm := SphereMesh.new()
 	sm.radius = 1.8
 	sm.height = 3.6
@@ -1159,7 +1243,7 @@ func _build_theme_fx() -> void:
 	_theme_kind = theme_id
 	if DisplayServer.get_name() == "headless":
 		return
-	var count := 200
+	var count := 90
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.instance_count = count
@@ -1175,6 +1259,14 @@ func _build_theme_fx() -> void:
 		cm.height = 7.0
 		cm.radial_segments = 4
 		mesh = cm
+	elif theme_id == "jade":
+		var lm := BoxMesh.new()
+		lm.size = Vector3(5.0, 1.2, 3.0)
+		mesh = lm
+	elif theme_id == "void":
+		var vm := BoxMesh.new()
+		vm.size = Vector3(2.6, 2.6, 2.6)
+		mesh = vm
 	else:
 		var sm := SphereMesh.new()
 		sm.radius = 2.2
@@ -1191,6 +1283,10 @@ func _build_theme_fx() -> void:
 		col = Color(0.82, 0.94, 1.0)
 	elif theme_id == "ember":
 		col = Color(1.0, 0.55, 0.22)
+	elif theme_id == "jade":
+		col = Color(0.62, 1.0, 0.72)
+	elif theme_id == "void":
+		col = Color(0.76, 0.66, 1.0)
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.9)
 	mat.emission_enabled = true
 	mat.emission = col
@@ -1239,6 +1335,19 @@ func _animate_theme_fx(delta: float) -> void:
 			p.x += sin(_time * 2.4 + ph) * delta * 16.0
 			if p.y > 640.0:
 				p.y = 6.0
+		elif _theme_kind == "jade":
+			# 翠叶：随风飘落并打旋
+			p.y -= delta * 18.0 * sp
+			p.x += sin(_time * 0.9 + ph) * delta * 22.0
+			p.z += cos(_time * 0.7 + ph) * delta * 14.0
+			if p.y < 6.0:
+				p.y = 560.0
+		elif _theme_kind == "void":
+			# 虚空星尘：缓慢上浮 + 明灭
+			p.y += delta * 12.0 * sp
+			p.x += sin(_time * 0.4 + ph) * delta * 8.0
+			if p.y > 640.0:
+				p.y = 8.0
 		else:
 			# 暮色余烬：缓慢上升 + 盘旋
 			p.y += delta * 16.0 * sp
@@ -1249,6 +1358,8 @@ func _animate_theme_fx(delta: float) -> void:
 		var s := 1.0
 		if _theme_kind == "ember":
 			s = 0.7 + 0.5 * absf(sin(_time * 3.0 + ph))
+		elif _theme_kind == "void":
+			s = 0.5 + 0.7 * absf(sin(_time * 1.7 + ph))
 		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(s, s, s)), p))
 
 
@@ -1519,6 +1630,7 @@ func make_piece(team: int, style := 0) -> Node3D:
 	gem.name = "Gem"
 	body.add_child(gem)
 
+	# 棋子随棋盘一起缩放：28 格时棋子更小、52 格时更大，与格子比例保持一致
 	_actors.append({
 		"root": root, "body": body, "cape": cape, "plume": plume, "banner": banner,
 		"phase": randf() * TAU, "style": style,
@@ -2352,6 +2464,10 @@ func theme_accent() -> Color:
 			return Color("aef0ff")
 		"ember":
 			return Color("ff9a3c")
+		"jade":
+			return Color("8ff0c0")
+		"void":
+			return Color("b8a0ff")
 		_:
 			return Color("ffd166")
 
