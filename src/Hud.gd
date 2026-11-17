@@ -9,10 +9,13 @@ signal restart_pressed
 signal home_pressed
 signal card_pressed(index: int)
 signal piece_pressed(index: int)
-signal start_pressed(mode: int, level: int, theme_id: String)
+signal start_pressed(mode: int, level: int, theme_id: String, cells: int, styles: Array)
 signal theme_previewed(theme_id: String)
 signal theme_selected(theme_id: String)
 signal sound_toggled(on: bool)
+signal roulette_spun(index: int)
+signal roulette_tick
+signal roulette_requested
 
 const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
@@ -33,10 +36,17 @@ const ITEM_INFO := {
 	"moonstep": ["月影跃步", "+2 格并得护盾", Color("cfd8ff")],
 	"frostlock": ["极寒锁链", "击退并冻结", Color("a8e6ff")],
 	"inferno": ["熔火冲锋", "冲锋并炸退敌人", Color("ff7a3c")],
+	"vortex": ["漩涡", "对手全体后退", Color("9a7bff")],
+	"steal": ["窃取", "抢对手一张卡", Color("ffb84a")],
+	"bomb": ["炸弹", "把对手炸回基地", Color("ff6a3c")],
+	"gale": ["疾风", "+2 格并再掷一次", Color("8ff0c0")],
 }
 
+const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵"]
+const BOARD_SIZES := [28, 40, 52]
+const BOARD_SIZE_NAMES := ["小型 · 28 格", "标准 · 40 格", "大型 · 52 格"]
+
 var _root: Control
-var _hint_button: Button
 var _hint_text: Label
 var _dice_label: Label
 var _log_panel: PanelContainer
@@ -56,8 +66,26 @@ var _card_labels: Array = []
 var _card_ids: Array = ["", "", "", ""]
 var _card_bar: Control
 var _pick_panel: PanelContainer
-var _pick_box: HBoxContainer
+var _pick_box: VBoxContainer
 var _pick_hint: Label
+var _pick_visible := true
+var _pick_toggle: Button
+var _last_options: Array = []
+var _last_hint := "选择一枚棋子"
+var _roulette_button: Button
+var _roulette_overlay: Control
+var _roulette_wheel: Wheel
+var _roulette_result: Label
+var _roulette_spin_btn: Button
+var _roulette_segments: Array = []
+var _roulette_spinning := false
+var _roulette_tween: Tween
+var _board_cells := 40
+var _board_buttons: Array = []
+var _char_styles: Array = [0, 1, 2, 3]
+var _char_buttons: Array = []
+var _char_team_buttons: Array = []
+var _char_team := 0
 var _start_overlay: Control
 var _win_overlay: Control
 var _win_title: Label
@@ -104,6 +132,7 @@ func _ready() -> void:
 	_build_dice_hint()
 	_build_cards()
 	_build_pick()
+	_build_roulette()
 	_build_toast()
 	_build_event()
 	_build_gesture()
@@ -300,6 +329,10 @@ func _build_menu() -> void:
 	_sound_button.pressed.connect(_toggle_sound)
 	vb.add_child(_sound_button)
 
+	_pick_toggle = _btn("走子列表：开", Vector2(0, 36), 14)
+	_pick_toggle.pressed.connect(_toggle_pick_visible)
+	vb.add_child(_pick_toggle)
+
 	vb.add_child(_spacer(4))
 	vb.add_child(_label("棋盘主题", 12, Color(1, 1, 1, 0.42)))
 	_theme_row = HBoxContainer.new()
@@ -325,6 +358,15 @@ func _toggle_sound() -> void:
 	_sound_on = not _sound_on
 	_sound_button.text = "音效：开" if _sound_on else "音效：关"
 	sound_toggled.emit(_sound_on)
+
+
+func _toggle_pick_visible() -> void:
+	_pick_visible = not _pick_visible
+	_pick_toggle.text = "走子列表：开" if _pick_visible else "走子列表：关"
+	if not _pick_visible:
+		_pick_panel.visible = false
+	elif not _last_options.is_empty():
+		_pick_panel.visible = true
 
 
 func _pick_theme(id: String) -> void:
@@ -417,35 +459,30 @@ func _toggle_log() -> void:
 func _build_dice_hint() -> void:
 	var holder := CenterContainer.new()
 	holder.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	holder.offset_top = -96.0 - _safe.w
-	holder.offset_bottom = -26.0 - _safe.w
+	holder.offset_top = -82.0 - _safe.w
+	holder.offset_bottom = -18.0 - _safe.w
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(holder)
 	_game_nodes.append(holder)
 
-	_hint_button = Button.new()
-	_hint_button.custom_minimum_size = Vector2(330, 62)
-	_hint_button.focus_mode = Control.FOCUS_NONE
-	_hint_button.add_theme_stylebox_override("normal", _btn_style(Color(0.05, 0.07, 0.11, 0.86), GOLD, 20))
-	_hint_button.add_theme_stylebox_override("hover", _btn_style(Color(0.12, 0.14, 0.2, 0.94), GOLD, 20))
-	_hint_button.add_theme_stylebox_override("pressed", _btn_style(Color(0.2, 0.16, 0.08, 0.96), GOLD, 20))
-	_hint_button.add_theme_stylebox_override("disabled", _btn_style(Color(0.03, 0.04, 0.07, 0.7), Color(1, 1, 1, 0.08), 20))
-	_hint_button.pressed.connect(func(): roll_pressed.emit())
-	holder.add_child(_hint_button)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(300, 0)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.06, 0.10, 0.62), 20, Color(1, 1, 1, 0.07)))
+	holder.add_child(panel)
 
 	var vb := VBoxContainer.new()
-	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_theme_constant_override("separation", 0)
-	_hint_button.add_child(vb)
+	panel.add_child(vb)
 
-	_hint_text = _label("点击棋盘中央的骰子投掷", 17, GOLD)
+	_hint_text = _label("点击棋盘中央的骰子投掷", 15, GOLD)
 	_hint_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hint_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(_hint_text)
 
-	_dice_label = _label("点数  —", 12, Color(1, 1, 1, 0.55))
+	_dice_label = _label("点数  —", 11, Color(1, 1, 1, 0.5))
 	_dice_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_dice_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(_dice_label)
@@ -514,28 +551,206 @@ func _build_cards() -> void:
 # ---------------------------------------------------------------- 选择面板
 
 func _build_pick() -> void:
-	var holder := CenterContainer.new()
-	holder.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	holder.offset_top = -260.0 - _safe.w
-	holder.offset_bottom = -172.0 - _safe.w
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(holder)
-
 	_pick_panel = PanelContainer.new()
-	_pick_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.9), 16, Color(1, 1, 1, 0.1)))
+	_pick_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.92), 16, GOLD, 2))
+	_pick_panel.anchor_left = 0.0
+	_pick_panel.anchor_top = 0.5
+	_pick_panel.anchor_bottom = 0.5
+	_pick_panel.offset_left = 18.0 + _safe.x
+	_pick_panel.offset_right = 250.0 + _safe.x
+	_pick_panel.offset_top = -120.0
+	_pick_panel.offset_bottom = 120.0
+	_pick_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_pick_panel.custom_minimum_size = Vector2(232, 0)
 	_pick_panel.visible = false
-	holder.add_child(_pick_panel)
+	_root.add_child(_pick_panel)
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 6)
 	_pick_panel.add_child(vb)
-	_pick_hint = _label("选择一枚棋子", 12, Color(1, 1, 1, 0.55))
-	_pick_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pick_hint = _label("选择一枚棋子", 12, Color(1, 1, 1, 0.6))
+	_pick_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_pick_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_pick_hint.custom_minimum_size = Vector2(204, 0)
 	vb.add_child(_pick_hint)
-	_pick_box = HBoxContainer.new()
-	_pick_box.add_theme_constant_override("separation", 8)
-	_pick_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_pick_box = VBoxContainer.new()
+	_pick_box.add_theme_constant_override("separation", 6)
+	_pick_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	vb.add_child(_pick_box)
+
+
+# ---------------------------------------------------------------- 俄罗斯轮盘
+
+func _build_roulette() -> void:
+	_roulette_button = _btn("俄 罗 斯 轮 盘", Vector2(176, 46), 15)
+	_roulette_button.anchor_top = 1.0
+	_roulette_button.anchor_bottom = 1.0
+	_roulette_button.offset_left = 20.0 + _safe.x
+	_roulette_button.offset_right = 196.0 + _safe.x
+	_roulette_button.offset_top = -128.0 - _safe.w
+	_roulette_button.offset_bottom = -82.0 - _safe.w
+	_roulette_button.add_theme_stylebox_override("normal", _btn_style(Color(0.22, 0.14, 0.05, 0.9), GOLD, 16))
+	_roulette_button.add_theme_stylebox_override("hover", _btn_style(Color(0.34, 0.22, 0.07, 0.96), Color("ffe0a0"), 16))
+	_roulette_button.add_theme_color_override("font_color", Color("ffe0a0"))
+	_roulette_button.pressed.connect(_on_roulette_button)
+	_root.add_child(_roulette_button)
+	_game_nodes.append(_roulette_button)
+
+	var halo := create_tween()
+	halo.set_loops()
+	halo.tween_property(_roulette_button, "modulate", Color(1.0, 0.9, 0.7, 0.8), 1.1)
+	halo.tween_property(_roulette_button, "modulate", Color.WHITE, 1.1)
+
+	_roulette_overlay = Control.new()
+	_roulette_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_roulette_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_roulette_overlay.visible = false
+	_root.add_child(_roulette_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.01, 0.012, 0.025, 0.82)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_roulette_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_roulette_overlay.add_child(center)
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.045, 0.08, 0.98), 26, GOLD, 3))
+	card.custom_minimum_size = Vector2(460, 0)
+	center.add_child(card)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	card.add_child(vb)
+
+	var title := _label("俄 罗 斯 轮 盘", 30, GOLD)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var sub := _label("命运之轮 · 掷出你的运气", 12, Color(1, 1, 1, 0.45))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(sub)
+
+	var wheel_holder := Control.new()
+	wheel_holder.custom_minimum_size = Vector2(360, 360)
+	wheel_holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	wheel_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(wheel_holder)
+
+	_roulette_wheel = Wheel.new()
+	_roulette_wheel.position = Vector2(10, 10)
+	_roulette_wheel.size = Vector2(340, 340)
+	_roulette_wheel.pivot_offset = Vector2(170, 170)
+	_roulette_wheel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wheel_holder.add_child(_roulette_wheel)
+
+	var pointer := _label("▼", 30, Color("ffe0a0"))
+	pointer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pointer.custom_minimum_size = Vector2(360, 0)
+	pointer.position = Vector2(0, -10)
+	pointer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wheel_holder.add_child(pointer)
+
+	_roulette_result = _label("点击下方按钮转动命运之轮", 15, Color(0.9, 0.94, 1.0, 0.85))
+	_roulette_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_roulette_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vb.add_child(_roulette_result)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	_roulette_spin_btn = _btn("开 始 旋 转", Vector2(0, 50), 20)
+	_roulette_spin_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_roulette_spin_btn.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 14))
+	_roulette_spin_btn.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
+	_roulette_spin_btn.add_theme_stylebox_override("pressed", _btn_style(Color("b5863f"), Color("ffe0a0"), 14))
+	_roulette_spin_btn.add_theme_color_override("font_color", Color("1a1206"))
+	_roulette_spin_btn.pressed.connect(_spin_roulette)
+	row.add_child(_roulette_spin_btn)
+
+	var close := _btn("离 开", Vector2(120, 50), 16)
+	close.pressed.connect(hide_roulette)
+	row.add_child(close)
+
+	var hint := _label("轮盘只会选中你已拾取的道具，其余扇区会触发全屏随机事件", 11, Color(1, 1, 1, 0.38))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hint)
+
+
+func _on_roulette_button() -> void:
+	roulette_requested.emit()
+
+
+## 工具栏 / 外部入口：显示轮盘（由 Main 传入扇区）
+func show_roulette(segments: Array) -> void:
+	_roulette_segments = segments
+	_roulette_result.text = "点击下方按钮转动命运之轮"
+	_roulette_result.add_theme_color_override("font_color", Color(0.9, 0.94, 1.0, 0.85))
+	_roulette_spin_btn.disabled = false
+	_roulette_spinning = false
+	_roulette_wheel.labels.clear()
+	_roulette_wheel.colors.clear()
+	for s in segments:
+		_roulette_wheel.labels.append(String(s.get("label", "?")))
+		_roulette_wheel.colors.append(s.get("color", Color.WHITE))
+	_roulette_wheel.rotation = 0.0
+	_roulette_wheel.queue_redraw()
+	_roulette_overlay.visible = true
+	_roulette_overlay.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(_roulette_overlay, "modulate:a", 1.0, 0.18)
+	_roulette_wheel.scale = Vector2(0.82, 0.82)
+	var pop := create_tween()
+	pop.tween_property(_roulette_wheel, "scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func hide_roulette() -> void:
+	_roulette_spinning = false
+	if _roulette_tween and _roulette_tween.is_valid():
+		_roulette_tween.kill()
+	_roulette_overlay.visible = false
+
+
+func _spin_roulette() -> void:
+	if _roulette_spinning or _roulette_segments.is_empty():
+		return
+	_roulette_spinning = true
+	_roulette_spin_btn.disabled = true
+	_roulette_result.text = "命运之轮转动中…"
+	_roulette_result.add_theme_color_override("font_color", GOLD)
+	var n := _roulette_segments.size()
+	var seg := TAU / float(n)
+	var idx := randi() % n
+	var jitter := randf_range(-seg * 0.3, seg * 0.3)
+	var target: float = -(float(idx) * seg + seg * 0.5) + jitter
+	while target < _roulette_wheel.rotation + TAU * 4.0:
+		target += TAU
+	var ticks := create_tween()
+	for k in 22:
+		ticks.tween_callback(func(): roulette_tick.emit())
+		ticks.tween_interval(0.055 + 0.008 * float(k))
+	_roulette_tween = create_tween()
+	_roulette_tween.tween_property(_roulette_wheel, "rotation", target, 2.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_roulette_tween.tween_callback(func(): _roulette_reveal(idx))
+
+
+func _roulette_reveal(idx: int) -> void:
+	_roulette_spinning = false
+	if idx < 0 or idx >= _roulette_segments.size():
+		hide_roulette()
+		return
+	var s: Dictionary = _roulette_segments[idx]
+	var col: Color = s.get("color", GOLD)
+	_roulette_result.text = "▶  %s  ◀" % s.get("label", "?")
+	_roulette_result.add_theme_color_override("font_color", col.lightened(0.2))
+	var pop := create_tween()
+	_roulette_result.scale = Vector2(1.3, 1.3)
+	pop.tween_property(_roulette_result, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await get_tree().create_timer(0.8).timeout
+	roulette_spun.emit(idx)
 
 
 # ---------------------------------------------------------------- 播报 / 事件
@@ -595,7 +810,7 @@ func _build_event() -> void:
 
 
 func _build_gesture() -> void:
-	_gesture = _label("单指拖动旋转视角 · 双指捏合缩放 · 点击骰子投掷", 12, Color(1, 1, 1, 0.42))
+	_gesture = _label("单指拖动旋转视角 · 双指捏合缩放 · 双指拖动平移棋盘 · 点击骰子投掷", 12, Color(1, 1, 1, 0.42))
 	_gesture.position = Vector2(26.0 + _safe.x, 0.0)
 	_gesture.anchor_top = 1.0
 	_gesture.anchor_bottom = 1.0
@@ -635,9 +850,9 @@ func _build_start() -> void:
 	vb.add_theme_constant_override("separation", 8)
 	card.add_child(vb)
 
-	var t := _label("骑士飞行棋 3", 40, GOLD)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(t)
+	var ttl := _label("骑士飞行棋 3", 40, GOLD)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(ttl)
 	var sub := _label("KNIGHT'S GAMBIT · 2026 REMAKE", 11, Color(1, 1, 1, 0.45))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
@@ -674,14 +889,51 @@ func _build_start() -> void:
 	theme_row.add_theme_constant_override("separation", 10)
 	vb.add_child(theme_row)
 	for i in 3:
-		var b3 := _btn(THEME_NAMES[i], Vector2(0, 44), 15)
+		var b3 := _btn(THEME_NAMES[i], Vector2(0, 40), 15)
 		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var tid: String = THEME_IDS[i]
 		b3.pressed.connect(func(): _select_theme(tid))
 		theme_row.add_child(b3)
 		_start_theme_buttons.append(b3)
 
-	vb.add_child(_spacer(10))
+	vb.add_child(_label("棋盘大小（大棋盘可用双指拖动平移）", 13, DIM))
+	var size_row := HBoxContainer.new()
+	size_row.add_theme_constant_override("separation", 10)
+	vb.add_child(size_row)
+	for i in BOARD_SIZES.size():
+		var bs := _btn(BOARD_SIZE_NAMES[i], Vector2(0, 40), 14)
+		bs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var bi := i
+		bs.pressed.connect(func(): _select_board_size(bi))
+		size_row.add_child(bs)
+		_board_buttons.append(bs)
+
+	vb.add_child(_label("棋子角色（先选队伍，再点角色）", 13, DIM))
+	var team_row := HBoxContainer.new()
+	team_row.add_theme_constant_override("separation", 8)
+	vb.add_child(team_row)
+	for t in 4:
+		var tb := _btn(["红队", "蓝队", "绿队", "黄队"][t], Vector2(0, 34), 13)
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var ti := t
+		tb.pressed.connect(func(): _select_char_team(ti))
+		team_row.add_child(tb)
+		_char_team_buttons.append(tb)
+
+	var char_grid := GridContainer.new()
+	char_grid.columns = 4
+	char_grid.add_theme_constant_override("h_separation", 8)
+	char_grid.add_theme_constant_override("v_separation", 6)
+	vb.add_child(char_grid)
+	for i in 8:
+		var cb := _btn(CHAR_NAMES[i], Vector2(0, 38), 14)
+		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var ci := i
+		cb.pressed.connect(func(): _select_char(ci))
+		char_grid.add_child(cb)
+		_char_buttons.append(cb)
+
+	vb.add_child(_spacer(6))
 	var go := _btn("开 始 对 局", Vector2(0, 58), 24)
 	go.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 14))
 	go.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
@@ -690,16 +942,18 @@ func _build_start() -> void:
 	go.pressed.connect(_start_clicked)
 	vb.add_child(go)
 
-	var hint := _label("11 种道具 · 10 种随机事件 · 宝箱格 / 安全格 · 掷 6 出基地", 12, Color(1, 1, 1, 0.45))
+	var hint := _label("15 种道具 · 14 种随机事件 · 俄罗斯轮盘 · 棋盘随机掉落", 12, Color(1, 1, 1, 0.45))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint)
-	var hint2 := _label("单指拖动旋转 · 双指缩放 · 点击骰子投掷 · 点棋子走子", 11, Color(1, 1, 1, 0.32))
+	var hint2 := _label("单指拖动旋转 · 双指捏合缩放 / 平移 · 点击骰子投掷 · 点棋子走子", 11, Color(1, 1, 1, 0.32))
 	hint2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint2)
 
 	_select_mode(0)
 	_select_level(1)
 	_select_theme("dusk")
+	_select_board_size(1)
+	_select_char_team(0)
 
 
 func _build_win() -> void:
@@ -760,6 +1014,46 @@ func _select_theme(id: String) -> void:
 	theme_previewed.emit(id)
 
 
+func _select_board_size(i: int) -> void:
+	_board_cells = BOARD_SIZES[clampi(i, 0, BOARD_SIZES.size() - 1)]
+	_paint_choice(_board_buttons, i)
+
+
+func _select_char_team(t: int) -> void:
+	_char_team = clampi(t, 0, 3)
+	_paint_char_ui()
+
+
+func _select_char(style: int) -> void:
+	_char_styles[_char_team] = clampi(style, 0, CHAR_NAMES.size() - 1)
+	var b: Button = _char_buttons[style]
+	b.pivot_offset = b.size * 0.5
+	b.scale = Vector2(1.18, 1.18)
+	var tw := create_tween()
+	tw.tween_property(b, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_paint_char_ui()
+
+
+func _paint_char_ui() -> void:
+	for t in _char_team_buttons.size():
+		var tb: Button = _char_team_buttons[t]
+		if t == _char_team:
+			tb.add_theme_stylebox_override("normal", _btn_style(Color(0.5, 0.38, 0.18, 0.7), GOLD))
+			tb.add_theme_color_override("font_color", Color("ffe6b8"))
+		else:
+			tb.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1)))
+			tb.add_theme_color_override("font_color", TEXT)
+	var active: int = _char_styles[_char_team]
+	for i in _char_buttons.size():
+		var b: Button = _char_buttons[i]
+		if i == active:
+			b.add_theme_stylebox_override("normal", _btn_style(Color(0.55, 0.42, 0.22, 0.75), Color("ffe0a0")))
+			b.add_theme_color_override("font_color", Color("fff2d0"))
+		else:
+			b.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.09)))
+			b.add_theme_color_override("font_color", Color(0.85, 0.89, 0.96, 0.85))
+
+
 func _paint_choice(buttons: Array, active: int) -> void:
 	for k in buttons.size():
 		var b: Button = buttons[k]
@@ -773,7 +1067,7 @@ func _paint_choice(buttons: Array, active: int) -> void:
 
 func _start_clicked() -> void:
 	hide_start()
-	start_pressed.emit(_mode, _level, _theme_id)
+	start_pressed.emit(_mode, _level, _theme_id, _board_cells, _char_styles.duplicate())
 
 
 # ---------------------------------------------------------------- 对外接口
@@ -833,7 +1127,6 @@ func set_dice(value: int, total := 0) -> void:
 
 
 func set_roll_enabled(on: bool, text := "") -> void:
-	_hint_button.disabled = not on
 	_hint_override = text
 	_refresh_hint()
 
@@ -901,23 +1194,26 @@ func _pop_card(b: Button) -> void:
 
 
 func show_pick(options: Array, hint := "选择一枚棋子") -> void:
+	_last_options = options.duplicate()
+	_last_hint = hint
 	for c in _pick_box.get_children():
 		c.queue_free()
 	if _pick_hint:
 		_pick_hint.text = hint
 	for opt in options:
-		var b := _btn(opt["label"], Vector2(140, 46), 15)
+		var b := _btn(opt["label"], Vector2(204, 46), 15)
 		var col: Color = opt["color"]
 		b.add_theme_stylebox_override("normal", _btn_style(Color(col.r * 0.35, col.g * 0.35, col.b * 0.35, 0.9), col))
 		b.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
 		var idx: int = opt["index"]
 		b.pressed.connect(func(): piece_pressed.emit(idx))
 		_pick_box.add_child(b)
-	_pick_panel.visible = true
+	_pick_panel.visible = _pick_visible
 
 
 func hide_pick() -> void:
 	_pick_panel.visible = false
+	_last_options.clear()
 
 
 func show_event(title: String, desc: String, color: Color) -> void:
@@ -977,3 +1273,44 @@ func hide_win() -> void:
 
 func set_start_visible(v: bool) -> void:
 	_start_overlay.visible = v
+
+
+## 轮盘绘制：八等分扇区 + 中心轴 + 金色外环（不依赖任何贴图）
+class Wheel extends Control:
+	var labels: Array = []
+	var colors: Array = []
+
+	func _draw() -> void:
+		var c := size * 0.5
+		var r: float = min(size.x, size.y) * 0.5 - 6.0
+		var n := labels.size()
+		if n <= 0:
+			draw_circle(c, r, Color(0.08, 0.1, 0.15, 1.0))
+			draw_arc(c, r, 0.0, TAU, 96, Color("f0cd8a"), 3.0, true)
+			return
+		var seg := TAU / float(n)
+		for i in n:
+			var a0 := -PI * 0.5 + seg * float(i)
+			var col: Color = colors[i] if i < colors.size() else Color.WHITE
+			var wedge := PackedVector2Array()
+			wedge.append(c)
+			var steps := 12
+			for k in steps + 1:
+				var a := a0 + seg * float(k) / float(steps)
+				wedge.append(c + Vector2(cos(a), sin(a)) * r)
+			var fill := Color(col.r * 0.42 + 0.04, col.g * 0.42 + 0.04, col.b * 0.42 + 0.05, 0.98)
+			draw_colored_polygon(wedge, fill)
+			var edge := c + Vector2(cos(a0), sin(a0)) * r
+			draw_line(c, edge, Color(1, 1, 1, 0.16), 1.5)
+			# 外缘高亮弧
+			draw_arc(c, r - 2.0, a0, a0 + seg, 16, Color(col.r, col.g, col.b, 0.85), 3.0, true)
+		var font := get_theme_default_font()
+		if font:
+			for i in n:
+				var mid := -PI * 0.5 + seg * (float(i) + 0.5)
+				var lp := c + Vector2(cos(mid), sin(mid)) * r * 0.66
+				draw_string(font, lp + Vector2(-62.0, 6.0), String(labels[i]),
+					HORIZONTAL_ALIGNMENT_CENTER, 124.0, 15, Color(1, 1, 1, 0.96))
+		draw_circle(c, r * 0.24, Color(0.03, 0.04, 0.075, 1.0))
+		draw_circle(c, r * 0.24, Color(0.95, 0.8, 0.45, 1.0), false, 2.5)
+		draw_arc(c, r, 0.0, TAU, 96, Color("f0cd8a"), 3.0, true)

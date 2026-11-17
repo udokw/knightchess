@@ -104,17 +104,32 @@ var _piece_marks: Array = []
 var _time := 0.0
 var _rolling := false
 var _dice_locked := false
+var _tile_size := TILE_SIZE
 
-# 事件格 / 安全格 3D 标记
+# 事件格 / 安全格 / 荆棘 / 传送 3D 标记
 var _chests: Array = []
 var _safe_marks: Array = []
+var _thorn_marks: Array = []
+var _portal_marks: Array = []
+# 随机事件格与随机掉落物（会频繁增删）
+var _event_nodes: Array = []
+var _drop_nodes: Array = []
+# 主题环境粒子
+var _theme_mm: MultiMeshInstance3D
+var _theme_pts: Array = []
+var _theme_kind := "dusk"
 # 棋子拟人动画数据
 var _actors: Array = []
 
+const PIECE_STYLE_NAMES := [
+	"骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵",
+]
 
-func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk") -> void:
+
+func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk", tile_size := TILE_SIZE) -> void:
 	team_colors = colors
 	theme_id = theme if THEMES.has(theme) else "dusk"
+	_tile_size = tile_size
 	_build_environment()
 	_make_materials()
 	_build_platform()
@@ -123,6 +138,7 @@ func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk") -> v
 	_build_bases(points)
 	_build_center()
 	_build_motes()
+	_build_theme_fx()
 	_build_dice()
 	_fx = Node3D.new()
 	_fx.name = "FX"
@@ -142,6 +158,7 @@ func _process(delta: float) -> void:
 			m.scale = Vector3(s, 1.0, s)
 	if _motes and is_instance_valid(_motes):
 		_motes.rotation.y += delta * 0.01
+	_animate_theme_fx(delta)
 	if _dice and not _rolling:
 		_dice.position.y = DICE_HOME.y + sin(_time * 1.6) * 5.0
 		_dice.rotation.y += delta * 0.55
@@ -161,6 +178,32 @@ func _process(delta: float) -> void:
 		pad.rotation.y -= delta * 0.6
 		var pulse: float = 1.0 + sin(_time * 3.0 + float(i)) * 0.08
 		pad.scale = Vector3(pulse, 1.0, pulse)
+
+	for i in _thorn_marks.size():
+		var spikes: Node3D = _thorn_marks[i]
+		if is_instance_valid(spikes):
+			spikes.rotation.y += delta * 0.35
+			var ts: float = 1.0 + sin(_time * 2.2 + float(i)) * 0.05
+			spikes.scale = Vector3(ts, 1.0, ts)
+	for i in _portal_marks.size():
+		var pad: Node3D = _portal_marks[i]
+		if is_instance_valid(pad):
+			pad.rotation.y -= delta * 1.2
+			var ps: float = 1.0 + sin(_time * 3.6 + float(i)) * 0.10
+			pad.scale = Vector3(ps, 1.0, ps)
+	for i in _event_nodes.size():
+		var ev: Node3D = _event_nodes[i]
+		if not is_instance_valid(ev):
+			continue
+		ev.position.y = 30.0 + sin(_time * 2.6 + float(i) * 0.9) * 7.0
+		ev.rotation.y += delta * 1.4
+	for i in _drop_nodes.size():
+		var dr: Node3D = _drop_nodes[i]
+		if not is_instance_valid(dr):
+			continue
+		dr.position.y = 34.0 + sin(_time * 3.4 + float(i) * 1.3) * 9.0
+		dr.rotation.y += delta * 2.6
+		dr.rotation.x = sin(_time * 1.8 + float(i)) * 0.25
 
 	# 棋子待机拟人动画
 	for a in _actors:
@@ -411,6 +454,7 @@ func _recolor_stone(m: StandardMaterial3D, base: Color, tint: float, tri: float,
 func set_theme(id: String) -> void:
 	if not THEMES.has(id):
 		return
+	var changed := id != theme_id
 	theme_id = id
 	var th: Dictionary = THEMES[id]
 
@@ -455,6 +499,10 @@ func set_theme(id: String) -> void:
 	if _motes_mat:
 		_motes_mat.albedo_color = Color(th["motes"])
 		_motes_mat.emission = Color(th["motes"])
+	if changed and _theme_mm != null:
+		_theme_mm.queue_free()
+		_theme_mm = null
+		_build_theme_fx()
 
 
 # ---------------------------------------------------------------- 几何工具
@@ -574,6 +622,7 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 	var n := ring.size()
 	if n == 0:
 		return
+	var step: int = maxi(n / 4, 1)
 	for i in n:
 		var p := _pt(points, ring[i])
 		var prev := _pt(points, ring[(i - 1 + n) % n])
@@ -591,25 +640,25 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 		tile.rotation.y = yaw_avg
 		add_child(tile)
 
-		var team := i / 10
-		var is_start := i % 10 == 0
+		var team := i / step
+		var is_start := i % step == 0
 		var base_mat := _stone_b if i % 2 == 0 else _stone_a
-		var slab := _add_box(tile, Vector3(TILE_SIZE - 8.0, TILE_TOP, TILE_SIZE - 8.0), Vector3(0, -TILE_TOP * 0.5, 0), base_mat)
+		var slab := _add_box(tile, Vector3(_tile_size - 8.0, TILE_TOP, _tile_size - 8.0), Vector3(0, -TILE_TOP * 0.5, 0), base_mat)
 		slab.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
 		# 金色凸框：让每一格从台面上清晰地"切"出来
 		var fw := 4.5
-		var edge := (TILE_SIZE - fw) * 0.5
-		var rim_far := _add_box(tile, Vector3(TILE_SIZE, 2.6, fw), Vector3(0, -0.4, edge), _gold)
-		var rim_near := _add_box(tile, Vector3(TILE_SIZE, 2.6, fw), Vector3(0, -0.4, -edge), _gold)
-		var rim_left := _add_box(tile, Vector3(fw, 2.6, TILE_SIZE - fw * 2.0), Vector3(-edge, -0.4, 0), _gold)
-		var rim_right := _add_box(tile, Vector3(fw, 2.6, TILE_SIZE - fw * 2.0), Vector3(edge, -0.4, 0), _gold)
+		var edge := (_tile_size - fw) * 0.5
+		var rim_far := _add_box(tile, Vector3(_tile_size, 2.6, fw), Vector3(0, -0.4, edge), _gold)
+		var rim_near := _add_box(tile, Vector3(_tile_size, 2.6, fw), Vector3(0, -0.4, -edge), _gold)
+		var rim_left := _add_box(tile, Vector3(fw, 2.6, _tile_size - fw * 2.0), Vector3(-edge, -0.4, 0), _gold)
+		var rim_right := _add_box(tile, Vector3(fw, 2.6, _tile_size - fw * 2.0), Vector3(edge, -0.4, 0), _gold)
 		for r in [rim_far, rim_near, rim_left, rim_right]:
 			var rmi: MeshInstance3D = r
 			rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 缝隙下的暗色底
-		_add_box(tile, Vector3(TILE_SIZE, 4.0, TILE_SIZE), Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 0.0).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_add_box(tile, Vector3(_tile_size, 4.0, _tile_size), Vector3(0, -TILE_TOP + 2.0, 0), _stone_dark, 0.0).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 		# 方向箭头（尖端指向行进方向）
 		var local_yaw := wrapf(yaw_next - yaw_avg, -PI, PI)
@@ -618,18 +667,22 @@ func _build_track(points: Dictionary, ring: Array) -> void:
 		chev.position.y = 0.8
 		tile.add_child(chev)
 		for side in [-1, 1]:
-			var bar := _add_box(chev, Vector3(10.0, 2.4, 34.0), Vector3(12.0 * side, 0, 3.0), _chevron, deg_to_rad(-32.0 * side))
+			var bar := _add_box(chev, Vector3(_tile_size * 0.1, 2.4, _tile_size * 0.34), Vector3(_tile_size * 0.12 * side, 0, _tile_size * 0.03), _chevron, deg_to_rad(-32.0 * side))
 			bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-		# 格子标记：宝箱格 / 安全格
-		if i % 10 == 5:
+		# 固定特殊地形：宝箱格 / 安全格 / 传送格 / 荆棘格
+		if i % step == step / 2:
 			_make_chest(tile)
-		elif i % 10 == 0:
+		elif i % step == 0:
 			_make_safe_pad(tile)
+		elif i % step == step * 3 / 10:
+			_make_portal_pad(tile)
+		elif i % step == step * 7 / 10:
+			_make_thorn_pad(tile)
 
 		if is_start and team >= 0 and team < _team_glow.size():
-			_add_box(tile, Vector3(TILE_SIZE - 22.0, 2.0, TILE_SIZE - 22.0), Vector3(0, 0.4, 0), _team_soft[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var halo := _add_torus(tile, 34.0, 38.0, Vector3(0, 1.0, 0), _team_glow[team])
+			_add_box(tile, Vector3(_tile_size - 22.0, 2.0, _tile_size - 22.0), Vector3(0, 0.4, 0), _team_soft[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var halo := _add_torus(tile, _tile_size * 0.34, _tile_size * 0.38, Vector3(0, 1.0, 0), _team_glow[team])
 			halo.name = "StartHalo"
 
 
@@ -712,6 +765,183 @@ func _make_safe_pad(tile: Node3D) -> void:
 	sign_l.position = Vector3(0, 46.0, 0)
 	tile.add_child(sign_l)
 
+
+## 传送格：紫色旋涡 + 双层环 + 「传送」招牌（踩中前进 4 格）
+func _make_portal_pad(tile: Node3D) -> void:
+	var pad := Node3D.new()
+	pad.position.y = 1.4
+	tile.add_child(pad)
+	_portal_marks.append(pad)
+
+	var mat := _unshaded(Color("b484ff"), 1.6)
+	_add_torus(pad, 26.0, 31.0, Vector3.ZERO, mat).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var r2 := _add_torus(pad, 15.0, 18.0, Vector3(0, 6.0, 0), _unshaded(Color("e2c8ff"), 2.2))
+	r2.rotation.x = deg_to_rad(90.0)
+	for k in 6:
+		var a := TAU * float(k) / 6.0
+		var gem := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 3.4
+		sm.height = 6.8
+		sm.radial_segments = 4
+		sm.rings = 2
+		gem.mesh = sm
+		gem.material_override = _unshaded(Color("c9a6ff"), 2.6)
+		gem.position = Vector3(cos(a) * 34.0, 8.0, sin(a) * 34.0)
+		gem.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		pad.add_child(gem)
+
+	var beam := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 26.0
+	cm.bottom_radius = 12.0
+	cm.height = 260.0
+	cm.radial_segments = 16
+	cm.cap_top = false
+	cm.cap_bottom = false
+	beam.mesh = cm
+	var bm := _unshaded(Color("b484ff"), 1.2)
+	(bm as StandardMaterial3D).albedo_color = Color(0.70, 0.52, 1.0, 0.10)
+	beam.material_override = bm
+	beam.position.y = 120.0
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	tile.add_child(beam)
+
+	var sign_l := _billboard_label("传送", Color("d8c4ff"), 34.0)
+	sign_l.position = Vector3(0, 52.0, 0)
+	tile.add_child(sign_l)
+
+
+## 荆棘格：暗红尖刺 + 「荆棘」招牌（踩中后退 2 格）
+func _make_thorn_pad(tile: Node3D) -> void:
+	var holder := Node3D.new()
+	holder.position.y = 1.0
+	tile.add_child(holder)
+	_thorn_marks.append(holder)
+
+	var mat := _unshaded(Color("ff5566"), 1.5)
+	_add_torus(holder, 26.0, 30.0, Vector3.ZERO, _unshaded(Color("8a2430"), 1.0)).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for k in 7:
+		var a := TAU * float(k) / 7.0 + 0.2
+		var spike := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = 8.0
+		cm.height = 34.0
+		cm.radial_segments = 4
+		spike.mesh = cm
+		spike.material_override = mat
+		spike.position = Vector3(cos(a) * 30.0, 12.0, sin(a) * 30.0)
+		spike.rotation.z = cos(a) * 0.3
+		spike.rotation.x = sin(a) * 0.3
+		spike.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(spike)
+
+	var sign_l := _billboard_label("荆棘", Color("ff8a92"), 32.0)
+	sign_l.position = Vector3(0, 48.0, 0)
+	tile.add_child(sign_l)
+
+
+## 随机事件格：漂浮符印 + 光柱（位置由 Main 随机指定）
+func spawn_event_cell(pos: Vector3, color: Color, symbol: String) -> Node3D:
+	var root := Node3D.new()
+	root.position = Vector3(pos.x, 30.0, pos.z)
+	add_child(root)
+	_event_nodes.append(root)
+
+	var ring := _add_torus(root, 28.0, 34.0, Vector3.ZERO, _unshaded(color, 2.2))
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var ring2 := _add_torus(root, 14.0, 18.0, Vector3(0, 6.0, 0), _unshaded(color.lightened(0.3), 2.8))
+	ring2.rotation.x = deg_to_rad(90.0)
+	ring2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	var core := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 10.0
+	sm.height = 20.0
+	sm.radial_segments = 4
+	sm.rings = 2
+	core.mesh = sm
+	core.material_override = _unshaded(color.lightened(0.45), 3.4)
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(core)
+
+	var lbl := _billboard_label(symbol, color.lightened(0.35), 52.0)
+	lbl.position = Vector3(0, 46.0, 0)
+	root.add_child(lbl)
+
+	var beam := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 24.0
+	cm.bottom_radius = 10.0
+	cm.height = 300.0
+	cm.radial_segments = 16
+	cm.cap_top = false
+	cm.cap_bottom = false
+	beam.mesh = cm
+	var bm := _unshaded(color, 1.4)
+	(bm as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.12)
+	beam.material_override = bm
+	beam.position = Vector3(0, 120.0, 0)
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(beam)
+	return root
+
+
+func remove_event_cell(node: Node3D) -> void:
+	_event_nodes.erase(node)
+	if is_instance_valid(node):
+		node.queue_free()
+
+
+## 随机掉落道具：悬浮宝珠 + 小光柱（位置由 Main 随机指定）
+func spawn_drop(pos: Vector3, color: Color) -> Node3D:
+	var root := Node3D.new()
+	root.position = Vector3(pos.x, 34.0, pos.z)
+	add_child(root)
+	_drop_nodes.append(root)
+
+	var shell := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(18, 18, 18)
+	shell.mesh = bm
+	shell.material_override = _unshaded(color.lightened(0.35), 3.0)
+	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(shell)
+
+	var ring := _add_torus(root, 20.0, 24.0, Vector3.ZERO, _unshaded(color, 2.4))
+	ring.rotation.x = deg_to_rad(72.0)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	var beam := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 14.0
+	cm.bottom_radius = 6.0
+	cm.height = 200.0
+	cm.radial_segments = 12
+	cm.cap_top = false
+	cm.cap_bottom = false
+	beam.mesh = cm
+	var bm2 := _unshaded(color, 1.2)
+	(bm2 as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.10)
+	beam.material_override = bm2
+	beam.position = Vector3(0, -100.0, 0)
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(beam)
+	return root
+
+
+func remove_drop(node: Node3D) -> void:
+	_drop_nodes.erase(node)
+	if is_instance_valid(node):
+		node.queue_free()
+
+
+func clear_random_marks() -> void:
+	for n in _event_nodes.duplicate():
+		remove_event_cell(n)
+	for n in _drop_nodes.duplicate():
+		remove_drop(n)
 
 func _build_goal_lanes(points: Dictionary) -> void:
 	for t in 4:
@@ -924,11 +1154,110 @@ func _build_motes() -> void:
 	add_child(_motes)
 
 
+## 主题专属环境粒子：暮色余烬 / 霜封落雪 / 熔火飞灰
+func _build_theme_fx() -> void:
+	_theme_kind = theme_id
+	if DisplayServer.get_name() == "headless":
+		return
+	var count := 200
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.instance_count = count
+	var mesh: Mesh
+	if theme_id == "frost":
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.4, 3.4, 3.4)
+		mesh = bm
+	elif theme_id == "ember":
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = 2.6
+		cm.height = 7.0
+		cm.radial_segments = 4
+		mesh = cm
+	else:
+		var sm := SphereMesh.new()
+		sm.radius = 2.2
+		sm.height = 4.4
+		sm.radial_segments = 5
+		sm.rings = 3
+		mesh = sm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var col: Color = Color(THEMES[theme_id]["motes"])
+	if theme_id == "frost":
+		col = Color(0.82, 0.94, 1.0)
+	elif theme_id == "ember":
+		col = Color(1.0, 0.55, 0.22)
+	mat.albedo_color = Color(col.r, col.g, col.b, 0.9)
+	mat.emission_enabled = true
+	mat.emission = col
+	mat.emission_energy_multiplier = 2.4
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if mesh is PrimitiveMesh:
+		(mesh as PrimitiveMesh).material = mat
+	elif mesh is ArrayMesh and (mesh as ArrayMesh).get_surface_count() > 0:
+		mesh.surface_set_material(0, mat)
+	mm.mesh = mesh
+	_theme_pts.clear()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261117
+	for i in count:
+		var a := rng.randf() * TAU
+		var r := sqrt(rng.randf()) * 1060.0
+		var y := rng.randf_range(10.0, 620.0)
+		var base := Vector3(cos(a) * r, y, sin(a) * r)
+		mm.set_instance_transform(i, Transform3D(Basis(), base))
+		_theme_pts.append({"pos": base, "speed": rng.randf_range(0.5, 1.5), "phase": rng.randf() * TAU})
+	_theme_mm = MultiMeshInstance3D.new()
+	_theme_mm.multimesh = mm
+	_theme_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_theme_mm)
+
+
+func _animate_theme_fx(delta: float) -> void:
+	if _theme_mm == null or _theme_mm.multimesh == null:
+		return
+	var mm: MultiMesh = _theme_mm.multimesh
+	var count := _theme_pts.size()
+	for i in count:
+		var d: Dictionary = _theme_pts[i]
+		var p: Vector3 = d["pos"]
+		var sp: float = d["speed"]
+		var ph: float = d["phase"]
+		if _theme_kind == "frost":
+			# 落雪：缓慢下坠 + 横向摆动
+			p.y -= delta * 34.0 * sp
+			p.x += sin(_time * 0.8 + ph) * delta * 10.0
+			if p.y < 6.0:
+				p.y = 620.0
+		elif _theme_kind == "ember":
+			# 飞灰：快速上升 + 闪烁偏移
+			p.y += delta * 62.0 * sp
+			p.x += sin(_time * 2.4 + ph) * delta * 16.0
+			if p.y > 640.0:
+				p.y = 6.0
+		else:
+			# 暮色余烬：缓慢上升 + 盘旋
+			p.y += delta * 16.0 * sp
+			p.x += sin(_time * 0.5 + ph) * delta * 6.0
+			if p.y > 620.0:
+				p.y = 8.0
+		d["pos"] = p
+		var s := 1.0
+		if _theme_kind == "ember":
+			s = 0.7 + 0.5 * absf(sin(_time * 3.0 + ph))
+		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(s, s, s)), p))
+
+
 # ---------------------------------------------------------------- 棋子
 
-func make_piece(team: int) -> Node3D:
+func make_piece(team: int, style := 0) -> Node3D:
 	if _pawn_mesh == null:
 		_pawn_mesh = _build_pawn_mesh()
+	style = clampi(style, 0, PIECE_STYLE_NAMES.size() - 1)
 	var root := Node3D.new()
 	root.name = "Piece"
 
@@ -958,33 +1287,77 @@ func make_piece(team: int) -> Node3D:
 
 	var belt := _add_torus(body, 16.0, 20.0, Vector3(0, 34.0, 0), _gold)
 	belt.name = "Belt"
-	var crest := _add_box(body, Vector3(15.0, 20.0, 4.0), Vector3(0, 62.0, 19.0), _team_glow[team])
-	crest.name = "Crest"
-	crest.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_add_box(body, Vector3(7.0, 10.0, 3.0), Vector3(0, 62.0, 21.5), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if style != 7:
+		var crest := _add_box(body, Vector3(15.0, 20.0, 4.0), Vector3(0, 62.0, 19.0), _team_glow[team])
+		crest.name = "Crest"
+		crest.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_add_box(body, Vector3(7.0, 10.0, 3.0), Vector3(0, 62.0, 21.5), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	# 头盔 + 面罩
-	var helmet := MeshInstance3D.new()
-	var hs := SphereMesh.new()
-	hs.radius = 17.5
-	hs.height = 30.0
-	hs.radial_segments = 16
-	hs.rings = 8
-	helmet.mesh = hs
-	helmet.material_override = _team_metal[team]
-	helmet.position.y = 104.0
-	body.add_child(helmet)
-	_add_torus(body, 15.0, 18.5, Vector3(0, 96.0, 0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var visor := _add_box(body, Vector3(22.0, 6.0, 4.0), Vector3(0, 105.0, 14.0), _pbr(Color("141a24"), 0.4, 0.3))
-	visor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_add_box(body, Vector3(6.0, 3.0, 2.0), Vector3(0, 105.0, 17.0), _team_glow[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# ---- 头部：按角色风格区分轮廓 ----
+	if style == 7:
+		# 机械兵：方形头颅 + 单眼 + 天线
+		_add_box(body, Vector3(30.0, 28.0, 28.0), Vector3(0, 104.0, 0), _pbr(Color("46525f"), 0.8, 0.35))
+		var eye := MeshInstance3D.new()
+		var es := SphereMesh.new()
+		es.radius = 4.6
+		es.height = 9.2
+		es.radial_segments = 10
+		es.rings = 5
+		eye.mesh = es
+		eye.position = Vector3(0, 106.0, 15.5)
+		eye.material_override = _team_glow[team]
+		eye.name = "Eye"
+		body.add_child(eye)
+		_add_box(body, Vector3(22.0, 3.0, 3.0), Vector3(0, 94.0, 15.0), _pbr(Color("141a24"), 0.4, 0.3))
+	else:
+		var helmet := MeshInstance3D.new()
+		var hs := SphereMesh.new()
+		hs.radius = 17.5
+		hs.height = 30.0
+		hs.radial_segments = 16
+		hs.rings = 8
+		helmet.mesh = hs
+		helmet.material_override = _team_metal[team]
+		helmet.position.y = 104.0
+		body.add_child(helmet)
+		_add_torus(body, 15.0, 18.5, Vector3(0, 96.0, 0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if style != 2 and style != 4:
+			var visor := _add_box(body, Vector3(22.0, 6.0, 4.0), Vector3(0, 105.0, 14.0), _pbr(Color("141a24"), 0.4, 0.3))
+			visor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_box(body, Vector3(6.0, 3.0, 2.0), Vector3(0, 105.0, 17.0), _team_glow[team]).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	# 肩甲
+		if style == 1:
+			# 法师尖顶帽 + 帽环
+			_add_cyl(body, 0.0, 22.0, 44.0, Vector3(0, 130.0, 0), _pbr(team_colors[team].darkened(0.35), 0.2, 0.6), 18)
+			_add_torus(body, 18.0, 23.0, Vector3(0, 112.0, 0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		elif style == 2 or style == 4:
+			# 兜帽
+			_add_cyl(body, 3.0, 23.0, 36.0, Vector3(0, 118.0, -1.0), _pbr(team_colors[team].darkened(0.5), 0.1, 0.8), 16)
+			_add_box(body, Vector3(24.0, 8.0, 5.0), Vector3(0, 104.0, 13.5), _pbr(Color("10151c"), 0.3, 0.4))
+		elif style == 3:
+			# 王冠
+			_add_cyl(body, 20.0, 20.0, 8.0, Vector3(0, 122.0, 0), _gold, 20)
+			for k in 5:
+				var a := TAU * float(k) / 5.0
+				var spike := _add_box(body, Vector3(4.0, 13.0, 4.0), Vector3(cos(a) * 16.0, 130.0, sin(a) * 16.0), _gold)
+				spike.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		elif style == 6:
+			# 女武神双翼头盔
+			for sd in [-1.0, 1.0]:
+				var wing := _add_box(body, Vector3(5.0, 17.0, 26.0), Vector3(20.0 * sd, 116.0, -4.0), _gold, deg_to_rad(20.0 * sd))
+				wing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		elif style == 5:
+			# 守卫重盔护颊
+			for sd in [-1.0, 1.0]:
+				_add_box(body, Vector3(5.0, 16.0, 14.0), Vector3(15.0 * sd, 101.0, 5.0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	# 肩甲（守卫更宽大）
+	var pauldron_scale := 1.35 if style == 5 else 1.0
 	for sd in [-1.0, 1.0]:
 		var pauldron := MeshInstance3D.new()
 		var ps := SphereMesh.new()
-		ps.radius = 11.0
-		ps.height = 20.0
+		ps.radius = 11.0 * pauldron_scale
+		ps.height = 20.0 * pauldron_scale
 		ps.radial_segments = 12
 		ps.rings = 6
 		pauldron.mesh = ps
@@ -993,61 +1366,145 @@ func make_piece(team: int) -> Node3D:
 		pauldron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		body.add_child(pauldron)
 
-	# 头盔羽饰（会摆动）
+	# ---- 头饰 / 披风 / 武器：每个角色的辨识度 ----
 	var plume := Node3D.new()
 	plume.name = "Plume"
 	plume.position = Vector3(0, 112.0, -4.0)
 	body.add_child(plume)
-	var pc := MeshInstance3D.new()
-	var pcm := CylinderMesh.new()
-	pcm.top_radius = 0.0
-	pcm.bottom_radius = 6.0
-	pcm.height = 30.0
-	pcm.radial_segments = 6
-	pc.mesh = pcm
-	pc.material_override = _team_glow[team]
-	pc.position = Vector3(0, 12.0, -4.0)
-	pc.rotation.x = -0.35
-	pc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	plume.add_child(pc)
-
-	# 披风（会飘动）
 	var cape := Node3D.new()
 	cape.name = "Cape"
 	cape.position = Vector3(0, 86.0, -16.0)
 	body.add_child(cape)
-	var cape_mat := _pbr(team_colors[team].darkened(0.45), 0.08, 0.7)
-	var cape_box := _add_box(cape, Vector3(33.0, 54.0, 3.0), Vector3(0, -27.0, 0), cape_mat)
-	cape_box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	cape.rotation.x = 0.12
-
-	# 佩剑
-	var sword := Node3D.new()
-	sword.name = "Sword"
-	sword.position = Vector3(27.0, 56.0, 6.0)
-	sword.rotation.z = -0.22
-	body.add_child(sword)
-	_add_box(sword, Vector3(4.0, 42.0, 9.0), Vector3.ZERO, _pbr(Color("dfe8f6"), 0.7, 0.28))
-	_add_box(sword, Vector3(12.0, 4.0, 6.0), Vector3(0, -21.0, 0), _gold)
-	_add_box(sword, Vector3(4.0, 12.0, 5.0), Vector3(0, -29.0, 0), _pbr(Color("4a2f1c"), 0.1, 0.7))
-
-	# 背旗
 	var banner := Node3D.new()
 	banner.name = "Banner"
 	banner.position = Vector3(0, 70.0, -20.0)
 	body.add_child(banner)
-	var pole := MeshInstance3D.new()
-	var pcm2 := CylinderMesh.new()
-	pcm2.top_radius = 1.6
-	pcm2.bottom_radius = 1.6
-	pcm2.height = 62.0
-	pcm2.radial_segments = 6
-	pole.mesh = pcm2
-	pole.material_override = _gold
-	pole.position.y = 14.0
-	banner.add_child(pole)
-	var flag := _add_box(banner, Vector3(1.6, 18.0, 24.0), Vector3(0, 34.0, 11.0), _team_glow[team])
-	flag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	match style:
+		0:
+			# 骑士：羽饰 + 披风 + 长剑 + 背旗
+			var pc := _add_cyl(plume, 0.0, 6.0, 30.0, Vector3(0, 12.0, -4.0), _team_glow[team], 6)
+			pc.rotation.x = -0.35
+			pc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_cape_sheet(cape, team, 33.0, 54.0)
+			var sword := Node3D.new()
+			sword.position = Vector3(27.0, 56.0, 6.0)
+			sword.rotation.z = -0.22
+			body.add_child(sword)
+			_add_box(sword, Vector3(4.0, 42.0, 9.0), Vector3.ZERO, _pbr(Color("dfe8f6"), 0.7, 0.28))
+			_add_box(sword, Vector3(12.0, 4.0, 6.0), Vector3(0, -21.0, 0), _gold)
+			_add_box(sword, Vector3(4.0, 12.0, 5.0), Vector3(0, -29.0, 0), _pbr(Color("4a2f1c"), 0.1, 0.7))
+			_add_banner(banner, team)
+		1:
+			# 法师：长袍 + 法杖 + 绕体符文环
+			var robe := _add_cyl(body, 26.0, 36.0, 46.0, Vector3(0, 16.0, 0), _pbr(team_colors[team].darkened(0.3), 0.2, 0.55), 18)
+			robe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var staff := Node3D.new()
+			staff.position = Vector3(28.0, 52.0, 8.0)
+			staff.rotation.z = -0.12
+			body.add_child(staff)
+			_add_cyl(staff, 1.8, 1.8, 66.0, Vector3.ZERO, _pbr(Color("5a3c22"), 0.1, 0.7), 6)
+			var orb := MeshInstance3D.new()
+			var os := SphereMesh.new()
+			os.radius = 6.2
+			os.height = 12.4
+			os.radial_segments = 12
+			os.rings = 6
+			orb.mesh = os
+			orb.position = Vector3(0, 36.0, 0)
+			orb.material_override = _unshaded(team_colors[team].lightened(0.25), 2.6)
+			staff.add_child(orb)
+			var rune := _add_torus(plume, 17.0, 20.0, Vector3(0, -4.0, 0), _unshaded(team_colors[team].lightened(0.3), 2.0))
+			rune.rotation.x = deg_to_rad(78.0)
+			rune.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_cape_sheet(cape, team, 30.0, 50.0)
+		2:
+			# 弓手：兜帽羽翎 + 长弓 + 箭袋
+			var feather := _add_cyl(plume, 0.0, 4.0, 34.0, Vector3(0, 10.0, -6.0), _team_glow[team], 6)
+			feather.rotation.x = -0.6
+			_add_cape_sheet(cape, team, 28.0, 44.0)
+			var bow := Node3D.new()
+			bow.position = Vector3(-27.0, 60.0, 4.0)
+			bow.rotation.z = 0.18
+			body.add_child(bow)
+			_add_box(bow, Vector3(3.0, 20.0, 4.0), Vector3(0, 14.0, 0), _pbr(Color("6a4a2a"), 0.2, 0.6), deg_to_rad(16.0))
+			_add_box(bow, Vector3(3.0, 20.0, 4.0), Vector3(0, -14.0, 0), _pbr(Color("6a4a2a"), 0.2, 0.6), deg_to_rad(-16.0))
+			_add_box(bow, Vector3(1.4, 46.0, 1.4), Vector3(-5.0, 0, 0), _pbr(Color("d8e2f0"), 0.6, 0.3))
+			var quiver := _add_cyl(body, 8.0, 7.0, 30.0, Vector3(16.0, 76.0, -18.0), _pbr(Color("4a2f1c"), 0.1, 0.7), 10)
+			quiver.rotation.x = -0.3
+			for k in 3:
+				_add_box(body, Vector3(1.4, 18.0, 1.4), Vector3(14.0 + k * 2.4, 92.0, -20.0), _gold)
+		3:
+			# 国王：披风 + 权杖 + 背旗
+			var scepter := Node3D.new()
+			scepter.position = Vector3(28.0, 54.0, 6.0)
+			scepter.rotation.z = -0.16
+			body.add_child(scepter)
+			_add_cyl(scepter, 2.2, 2.2, 54.0, Vector3.ZERO, _gold, 8)
+			var jewel := MeshInstance3D.new()
+			var js := SphereMesh.new()
+			js.radius = 7.0
+			js.height = 14.0
+			js.radial_segments = 8
+			js.rings = 4
+			jewel.mesh = js
+			jewel.position = Vector3(0, 30.0, 0)
+			jewel.material_override = _unshaded(team_colors[team].lightened(0.35), 2.4)
+			scepter.add_child(jewel)
+			_add_cape_sheet(cape, team, 42.0, 66.0)
+			_add_banner(banner, team)
+		4:
+			# 刺客：面巾 + 双匕首 + 短披风
+			_add_box(body, Vector3(24.0, 10.0, 24.0), Vector3(0, 100.0, 0), _pbr(Color("20262f"), 0.4, 0.5))
+			_add_box(body, Vector3(12.0, 4.0, 3.0), Vector3(0, 103.0, 14.0), _team_glow[team])
+			_add_cape_sheet(cape, team, 24.0, 38.0)
+			for sd in [-1.0, 1.0]:
+				var dagger := Node3D.new()
+				dagger.position = Vector3(27.0 * sd, 54.0, 8.0)
+				dagger.rotation.z = 0.5 * sd
+				body.add_child(dagger)
+				_add_box(dagger, Vector3(3.0, 26.0, 6.0), Vector3(0, 4.0, 0), _pbr(Color("e2ecf8"), 0.8, 0.25))
+				_add_box(dagger, Vector3(9.0, 3.0, 5.0), Vector3(0, -10.0, 0), _gold)
+		5:
+			# 守卫：塔盾 + 战锤
+			var shield := _add_box(body, Vector3(8.0, 64.0, 40.0), Vector3(-30.0, 58.0, 8.0), _team_metal[team])
+			shield.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_box(body, Vector3(11.0, 12.0, 30.0), Vector3(-30.0, 58.0, 8.0), _gold).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var hammer := Node3D.new()
+			hammer.position = Vector3(30.0, 58.0, 4.0)
+			hammer.rotation.z = -0.2
+			body.add_child(hammer)
+			_add_cyl(hammer, 2.4, 2.4, 54.0, Vector3.ZERO, _pbr(Color("4a2f1c"), 0.1, 0.7), 8)
+			_add_box(hammer, Vector3(18.0, 14.0, 14.0), Vector3(0, 30.0, 0), _team_metal[team])
+			_add_cape_sheet(cape, team, 30.0, 42.0)
+		6:
+			# 女武神：长枪 + 披风 + 翼羽
+			var spear := Node3D.new()
+			spear.position = Vector3(28.0, 58.0, 8.0)
+			spear.rotation.z = -0.1
+			body.add_child(spear)
+			_add_cyl(spear, 1.8, 1.8, 96.0, Vector3.ZERO, _pbr(Color("e8eef8"), 0.7, 0.3), 8)
+			var tip := _add_cyl(spear, 0.0, 5.0, 20.0, Vector3(0, 54.0, 0), _gold, 4)
+			tip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_add_cape_sheet(cape, team, 34.0, 58.0)
+			var wing := _add_box(plume, Vector3(4.0, 26.0, 10.0), Vector3(0, 12.0, -2.0), _team_glow[team])
+			wing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		7:
+			# 机械兵：天线 + 活塞臂 + 无披风
+			_add_cyl(plume, 1.4, 2.2, 22.0, Vector3(0, 6.0, 0), _pbr(Color("8a97a6"), 0.8, 0.3), 6)
+			var beacon := MeshInstance3D.new()
+			var bs := SphereMesh.new()
+			bs.radius = 4.2
+			bs.height = 8.4
+			bs.radial_segments = 8
+			bs.rings = 4
+			beacon.mesh = bs
+			beacon.position = Vector3(0, 18.0, 0)
+			beacon.material_override = _unshaded(team_colors[team].lightened(0.3), 2.8)
+			plume.add_child(beacon)
+			for sd in [-1.0, 1.0]:
+				_add_cyl(body, 6.0, 7.0, 30.0, Vector3(27.0 * sd, 52.0, 0), _pbr(Color("5b6672"), 0.7, 0.35), 10)
+				_add_box(body, Vector3(12.0, 12.0, 12.0), Vector3(27.0 * sd, 34.0, 0), _team_metal[team])
 
 	# 头顶阵营信标
 	var gem := MeshInstance3D.new()
@@ -1057,16 +1514,30 @@ func make_piece(team: int) -> Node3D:
 	sm.radial_segments = 4
 	sm.rings = 2
 	gem.mesh = sm
-	gem.position.y = 146.0
+	gem.position.y = 152.0 if style == 7 else 146.0
 	gem.material_override = _team_glow[team]
 	gem.name = "Gem"
 	body.add_child(gem)
 
 	_actors.append({
 		"root": root, "body": body, "cape": cape, "plume": plume, "banner": banner,
-		"phase": randf() * TAU,
+		"phase": randf() * TAU, "style": style,
 	})
 	return root
+
+
+func _add_cape_sheet(cape: Node3D, team: int, w: float, h: float) -> void:
+	var cape_mat := _pbr(team_colors[team].darkened(0.45), 0.08, 0.7)
+	var sheet := _add_box(cape, Vector3(w, h, 3.0), Vector3(0, -h * 0.5, 0), cape_mat)
+	sheet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	cape.rotation.x = 0.12
+
+
+func _add_banner(banner: Node3D, team: int) -> void:
+	var pole := _add_cyl(banner, 1.6, 1.6, 62.0, Vector3(0, 14.0, 0), _gold, 6)
+	pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var flag := _add_box(banner, Vector3(1.6, 18.0, 24.0), Vector3(0, 34.0, 11.0), _team_glow[team])
+	flag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _actor_of(node: Node) -> Dictionary:
@@ -1308,8 +1779,9 @@ func roll_dice(value: int) -> void:
 
 func mark_tiles(positions: Array, color: Color) -> void:
 	clear_marks()
+	var k := _tile_size / 100.0
 	for p in positions:
-		var mi := _glow_ring(color, 34.0, 40.0)
+		var mi := _glow_ring(color, 34.0 * k, 40.0 * k)
 		mi.position = Vector3(p.x, TILE_TOP + 2.0, p.z)
 		_marks.append(mi)
 
@@ -1783,4 +2255,104 @@ func snipe_streak(from: Vector3, to: Vector3, color: Color) -> void:
 	t.parallel().tween_property(mi.material_override, "albedo_color:a", 0.0, 0.3)
 	t.chain().tween_callback(mi.queue_free)
 	impact(Vector3(to.x, 0.0, to.z), color) 
+
+
+## 俄罗斯轮盘触发事件时的全屏炸裂：天空光柱 + 多重冲击波 + 碎片 + 穹顶闪光
+func roulette_blast(pos: Vector3, color: Color) -> void:
+	var ground := Vector3(pos.x, TILE_TOP + 2.0, pos.z)
+	# 三重地面冲击波
+	for k in 3:
+		_shockwave(ground, color if k != 1 else color.lightened(0.45), 0.0, 9.0 + float(k) * 5.0, 0.7 + 0.12 * float(k))
+	# 天降巨型光柱
+	var beam := MeshInstance3D.new()
+	var bcm := CylinderMesh.new()
+	bcm.top_radius = 42.0
+	bcm.bottom_radius = 120.0
+	bcm.height = 1500.0
+	bcm.radial_segments = 20
+	bcm.cap_top = false
+	bcm.cap_bottom = false
+	beam.mesh = bcm
+	beam.material_override = _unshaded(color, 1.8)
+	(beam.material_override as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.28)
+	beam.position = Vector3(pos.x, 740.0, pos.z)
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(beam)
+	var tb := create_tween()
+	tb.tween_property(beam, "scale", Vector3(0.1, 1.0, 0.1), 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tb.parallel().tween_property(beam.material_override, "albedo_color:a", 0.8, 0.18)
+	tb.tween_property(beam.material_override, "albedo_color:a", 0.0, 0.4)
+	tb.chain().tween_callback(beam.queue_free)
+	# 穹顶闪光
+	var dome := MeshInstance3D.new()
+	var dm := SphereMesh.new()
+	dm.radius = 100.0
+	dm.height = 200.0
+	dm.radial_segments = 24
+	dm.rings = 12
+	dome.mesh = dm
+	dome.material_override = _unshaded(color.lightened(0.5), 4.0)
+	(dome.material_override as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.55)
+	dome.position = ground + Vector3(0, 40.0, 0)
+	dome.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(dome)
+	var td := create_tween()
+	td.set_parallel(true)
+	td.tween_property(dome, "scale", Vector3(9.0, 5.0, 9.0), 0.7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	td.tween_property(dome.material_override, "albedo_color:a", 0.0, 0.7)
+	td.chain().tween_callback(dome.queue_free)
+	# 8 道冲天火柱
+	for k in 8:
+		var a := TAU * float(k) / 8.0
+		var pillar := MeshInstance3D.new()
+		var pcm := CylinderMesh.new()
+		pcm.top_radius = 6.0
+		pcm.bottom_radius = 24.0
+		pcm.height = 260.0
+		pcm.radial_segments = 10
+		pillar.mesh = pcm
+		pillar.material_override = _unshaded(color.lightened(0.3), 3.2)
+		pillar.position = Vector3(pos.x + cos(a) * 96.0, 130.0, pos.z + sin(a) * 96.0)
+		pillar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_fx.add_child(pillar)
+		var tp := create_tween()
+		tp.set_parallel(true)
+		tp.tween_property(pillar, "position:y", 420.0, 0.62).set_delay(0.05 * float(k)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tp.tween_property(pillar, "scale", Vector3(0.15, 1.8, 0.15), 0.62)
+		tp.tween_property(pillar.material_override, "albedo_color:a", 0.0, 0.62)
+		tp.chain().tween_callback(pillar.queue_free)
+	# 碎片飞散
+	for i in 34:
+		var shard := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		var sz := randf_range(6.0, 18.0)
+		bm.size = Vector3(sz, sz, sz)
+		shard.mesh = bm
+		shard.material_override = _unshaded(color.lightened(randf_range(0.1, 0.5)), 2.6)
+		shard.position = ground + Vector3(0, 30.0, 0)
+		shard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_fx.add_child(shard)
+		var a2 := randf() * TAU
+		var dist := randf_range(110.0, 320.0)
+		var target := shard.position + Vector3(cos(a2) * dist, randf_range(90.0, 330.0), sin(a2) * dist)
+		var ts := create_tween()
+		ts.set_parallel(true)
+		ts.tween_property(shard, "position", target, 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		ts.tween_property(shard, "rotation", Vector3(randf() * 12.0, randf() * 12.0, randf() * 12.0), 1.0)
+		ts.tween_property(shard.material_override, "albedo_color:a", 0.0, 1.0).set_delay(0.35)
+		ts.chain().tween_callback(shard.queue_free)
+	burst(ground, color, 26)
+	impact(ground, color)
+
+
+## 主题强调色（轮盘、事件、UI 光效统一取色）
+func theme_accent() -> Color:
+	match theme_id:
+		"frost":
+			return Color("aef0ff")
+		"ember":
+			return Color("ff9a3c")
+		_:
+			return Color("ffd166")
+
 

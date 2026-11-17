@@ -6,7 +6,8 @@
 
 const TEAM_NAMES := ["红队", "蓝队", "绿队", "黄队"]
 const TEAM_COLORS := [Color("e0503f"), Color("3d8ae0"), Color("3fb96a"), Color("e0a92f")]
-const FIELDS := 40
+const BASE_FIELDS := 40
+var FIELDS := 40
 const PIECES_PER_TEAM := 4
 const BOARD_Y := 8.0
 
@@ -14,6 +15,7 @@ const ITEM_NAMES := {
 	"boost": "加速", "shield": "护盾", "warp": "跃迁", "snipe": "狙击",
 	"swap": "换位", "freeze": "冰冻", "double": "双倍", "teleport": "传送",
 	"moonstep": "月影跃步", "frostlock": "极寒锁链", "inferno": "熔火冲锋",
+	"vortex": "漩涡", "steal": "窃取", "bomb": "炸弹", "gale": "疾风",
 }
 const ITEM_DESC := {
 	"boost": "本回合点数 +2", "shield": "免疫一次吃子", "warp": "前进 3 格",
@@ -21,15 +23,22 @@ const ITEM_DESC := {
 	"double": "本回合点数 ×2", "teleport": "前进 5 格",
 	"moonstep": "前进 2 格并获得护盾", "frostlock": "对手后退 2 格并冻结",
 	"inferno": "前进 4 格，落点附近对手全被炸退",
+	"vortex": "所有对手棋子后退 1 格", "steal": "从道具最多的对手手中抢一张",
+	"bomb": "把一名对手棋子炸回基地", "gale": "前进 2 格并再掷一次",
 }
 const ITEM_COLORS := {
 	"boost": Color("ff9a3c"), "shield": Color("6cc6ff"), "warp": Color("b484ff"),
 	"snipe": Color("ff5566"), "swap": Color("ffd166"), "freeze": Color("7fe6ff"),
 	"double": Color("ffe066"), "teleport": Color("7cf0a8"),
 	"moonstep": Color("cfd8ff"), "frostlock": Color("a8e6ff"), "inferno": Color("ff7a3c"),
+	"vortex": Color("9a7bff"), "steal": Color("ffb84a"), "bomb": Color("ff6a3c"),
+	"gale": Color("8ff0c0"),
 }
 ## 共同道具池 + 每个主题的独占道具
-const ITEM_POOL := ["boost", "shield", "warp", "snipe", "swap", "freeze", "double", "teleport"]
+const ITEM_POOL := [
+	"boost", "shield", "warp", "snipe", "swap", "freeze", "double", "teleport",
+	"vortex", "steal", "bomb", "gale",
+]
 const THEME_ITEM := {
 	"dusk": "moonstep", "frost": "frostlock", "ember": "inferno",
 }
@@ -38,18 +47,40 @@ const EVENT_TITLES := {
 	"treasure": "秘 宝", "meteor": "陨 石", "tailwind": "顺 风", "trap": "陷 阱",
 	"portal": "传送门", "chaos": "混 沌", "bless": "祝 福",
 	"starlight": "星辉之赐", "blizzard": "暴风雪", "eruption": "火山喷发",
+	"ambush": "伏 击", "goldrain": "金 雨", "earthquake": "地 震", "curse": "诅 咒",
 }
 const EVENT_COLORS := {
 	"treasure": Color("ffd166"), "meteor": Color("ff6a3c"), "tailwind": Color("7cf0a8"),
 	"trap": Color("ff5566"), "portal": Color("b484ff"), "chaos": Color("ff8ce0"),
 	"bless": Color("6cc6ff"),
 	"starlight": Color("e8ecff"), "blizzard": Color("a8e6ff"), "eruption": Color("ff8a3c"),
+	"ambush": Color("ff7a92"), "goldrain": Color("ffd166"), "earthquake": Color("c9a06a"),
+	"curse": Color("b98cff"),
 }
-const EVENT_POOL := ["treasure", "meteor", "tailwind", "trap", "portal", "chaos", "bless"]
+const EVENT_SYMBOLS := {
+	"treasure": "宝", "meteor": "陨", "tailwind": "风", "trap": "陷",
+	"portal": "门", "chaos": "混", "bless": "福",
+	"starlight": "星", "blizzard": "雪", "eruption": "火",
+	"ambush": "伏", "goldrain": "金", "earthquake": "震", "curse": "咒",
+}
+const EVENT_POOL := [
+	"treasure", "meteor", "tailwind", "trap", "portal", "chaos", "bless",
+	"ambush", "goldrain", "earthquake", "curse",
+]
 ## 每个主题额外加入的独占事件
 const THEME_EVENT := {
 	"dusk": "starlight", "frost": "blizzard", "ember": "eruption",
 }
+
+var base_points: Dictionary = {}
+var board_cells := 40
+var char_styles: Array = [0, 1, 2, 3]
+var drops: Dictionary = {}
+var event_cells: Dictionary = {}
+var turn_count := 0
+var roulette_used := false
+var roulette_open := false
+var _roulette_segments: Array = []
 
 var data: Dictionary = {}
 var pts: Dictionary = {}
@@ -98,12 +129,19 @@ var camera: Camera3D
 var dragging := false
 var _touches: Dictionary = {}
 var _pinch_dist := 0.0
+var _pinch_mid := Vector2.ZERO
 var _using_touch := false
 
 var dice_player: AudioStreamPlayer
 var click_player: AudioStreamPlayer
 var nope_player: AudioStreamPlayer
-var ambient: AudioStreamPlayer
+var theme_amb: AudioStreamPlayer
+var sfx_event: AudioStreamPlayer
+var sfx_boom: AudioStreamPlayer
+var sfx_tick: AudioStreamPlayer
+var sfx_win: AudioStreamPlayer
+var sfx_drop: AudioStreamPlayer
+var _amb_streams: Dictionary = {}
 
 
 func _ready() -> void:
@@ -116,6 +154,8 @@ func _ready() -> void:
 			shot_path = a.substr(7)
 		elif a.begins_with("--theme="):
 			theme_id = a.substr(8)
+		elif a.begins_with("--cells="):
+			board_cells = clampi(int(a.substr(8)), 20, 60)
 		elif a == "--auto":
 			auto_mode = true
 		elif a == "--showcase":
@@ -131,7 +171,7 @@ func _ready() -> void:
 	_setup_hud()
 
 	if (auto_mode or shot_path != "") and not menu_mode:
-		_start_match(0, 1, theme_id)
+		_start_match(0, 1, theme_id, board_cells, char_styles)
 		hud.hide_start()
 		if showcase:
 			_setup_showcase()
@@ -146,6 +186,16 @@ func _ready() -> void:
 			hud._toggle_menu()
 		if all_args.has("--logopen"):
 			hud._toggle_log()
+		if all_args.has("--wheel"):
+			roulette_open = true
+			_roulette_segments = _build_roulette_segments()
+			hud.show_roulette(_roulette_segments)
+			await get_tree().create_timer(0.9).timeout
+		if all_args.has("--blast"):
+			var bc: Color = arena.theme_accent()
+			arena.roulette_blast(Vector3(0, BOARD_Y, 0), bc)
+			hud.screen_flash(bc, 0.5)
+			await get_tree().create_timer(0.4).timeout
 		await _take_screenshot()
 
 
@@ -158,9 +208,44 @@ func _load_data() -> void:
 		push_error("board.json 解析失败")
 		return
 	data = parsed
-	pts = data["points"]
-	for i in 4:
-		paths.append(data["paths"]["TEAMPATH%d" % (i + 1)])
+	base_points = data["points"]
+	_apply_board_size(board_cells)
+
+
+## 在 40 格原始环线上按弧长重采样出任意格数的棋盘
+func _apply_board_size(n: int) -> void:
+	n = clampi(n, 20, 60)
+	board_cells = n
+	FIELDS = n
+	if base_points.is_empty():
+		return
+	pts = {}
+	for k in base_points.keys():
+		pts[k] = base_points[k]
+	var base_ring: Array = data["paths"]["TEAMPATH1"]
+	var m: int = base_ring.size()
+	if m <= 0:
+		return
+	for k in n:
+		var fk := float(k) * float(m) / float(n)
+		var i0 := int(floor(fk)) % m
+		var i1 := (i0 + 1) % m
+		var fr: float = fk - floor(fk)
+		var p0: Array = base_points[base_ring[i0]]
+		var p1: Array = base_points[base_ring[i1]]
+		pts["BS%02d" % k] = [
+			lerpf(float(p0[0]), float(p1[0]), fr),
+			lerpf(float(p0[1]), float(p1[1]), fr),
+			lerpf(float(p0[2]), float(p1[2]), fr),
+		]
+	paths = []
+	var step := n / 4
+	for t in 4:
+		var path: Array = []
+		for k in n:
+			path.append("BS%02d" % ((k + t * step) % n))
+		paths.append(path)
+	ring_index = {}
 	var ring: Array = paths[0]
 	for i in ring.size():
 		ring_index[ring[i]] = i
@@ -170,7 +255,31 @@ func _setup_world() -> void:
 	arena = Arena.new()
 	arena.name = "Arena"
 	add_child(arena)
-	arena.build(pts, paths[0], TEAM_COLORS, theme_id)
+	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0 * 40.0 / float(FIELDS))
+
+
+func _rebuild_arena() -> void:
+	for p in pieces:
+		if is_instance_valid(p["node"]):
+			p["node"].queue_free()
+	pieces = []
+	if is_instance_valid(arena):
+		remove_child(arena)
+		arena.queue_free()
+	arena = Arena.new()
+	arena.name = "Arena"
+	add_child(arena)
+	arena.build(pts, paths[0], TEAM_COLORS, theme_id, 100.0 * 40.0 / float(FIELDS))
+	arena.set_active_team(current_team)
+	_spawn_pieces(char_styles)
+
+
+func _rebuild_pieces() -> void:
+	for p in pieces:
+		if is_instance_valid(p["node"]):
+			p["node"].queue_free()
+	pieces = []
+	_spawn_pieces(char_styles)
 
 
 func _setup_camera() -> void:
@@ -196,11 +305,43 @@ func _setup_audio() -> void:
 	dice_player = _make_player("res://assets/sounds/dice_move.wav", -3.0)
 	click_player = _make_player("res://assets/sounds/button_click.wav", -8.0)
 	nope_player = _make_player("res://assets/sounds/cant_move.wav", -8.0)
-	ambient = _make_player("res://assets/sounds/ambient.ogg", -22.0)
-	if ambient.stream is AudioStreamOggVorbis:
-		(ambient.stream as AudioStreamOggVorbis).loop = true
-	if ambient.stream != null:
-		ambient.play()
+	sfx_event = _make_player("res://assets/sounds/sfx_event.wav", -6.0)
+	sfx_boom = _make_player("res://assets/sounds/sfx_bigboom.wav", -5.0)
+	sfx_tick = _make_player("res://assets/sounds/sfx_roulette.wav", -4.0)
+	sfx_win = _make_player("res://assets/sounds/sfx_win.wav", -6.0)
+	sfx_drop = _make_player("res://assets/sounds/sfx_drop.wav", -7.0)
+	_amb_streams = {
+		"dusk": load("res://assets/sounds/amb_dusk.wav"),
+		"frost": load("res://assets/sounds/amb_frost.wav"),
+		"ember": load("res://assets/sounds/amb_ember.wav"),
+	}
+	for k in _amb_streams.keys():
+		_prepare_loop(_amb_streams[k])
+	theme_amb = _make_player("res://assets/sounds/amb_dusk.wav", -19.0)
+	_apply_theme_audio()
+
+
+func _prepare_loop(s: AudioStream) -> void:
+	if s is AudioStreamWAV:
+		var w := s as AudioStreamWAV
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		w.loop_begin = 0
+		w.loop_end = int(w.get_length() * float(w.mix_rate))
+	elif s is AudioStreamOggVorbis:
+		(s as AudioStreamOggVorbis).loop = true
+
+
+## 每个主题切换专属环境音
+func _apply_theme_audio() -> void:
+	if theme_amb == null:
+		return
+	var s: AudioStream = _amb_streams.get(theme_id, null)
+	if s == null:
+		return
+	if theme_amb.stream == s and theme_amb.playing:
+		return
+	theme_amb.stream = s
+	theme_amb.play()
 
 
 func _make_player(path: String, db: float) -> AudioStreamPlayer:
@@ -216,16 +357,19 @@ func _play(p: AudioStreamPlayer) -> void:
 		p.play()
 
 
-func _spawn_pieces() -> void:
+func _spawn_pieces(styles: Array = []) -> void:
 	for t in 4:
+		var style := t
+		if t < styles.size():
+			style = clampi(int(styles[t]), 0, 7)
 		for i in PIECES_PER_TEAM:
-			var node := arena.make_piece(t)
+			var node := arena.make_piece(t, style)
 			node.name = "P%d_%d" % [t + 1, i + 1]
 			arena.add_child(node)
 			node.position = _pt_pos("HM%d_%d" % [t + 1, i + 1])
 			pieces.append({
 				"team": t, "idx": i, "cell": -1, "finished": false,
-				"shield": false, "node": node,
+				"shield": false, "style": style, "node": node,
 			})
 
 
@@ -238,19 +382,37 @@ func _setup_hud() -> void:
 	hud.card_pressed.connect(_on_card_pressed)
 	hud.piece_pressed.connect(_on_piece_pressed)
 	hud.start_pressed.connect(_start_match)
+	hud.roulette_requested.connect(_on_roulette_requested)
+	hud.roulette_spun.connect(_on_roulette_spun)
+	hud.roulette_tick.connect(func(): _play(sfx_tick))
 	hud.theme_previewed.connect(func(id: String): arena.set_theme(id))
 	hud.theme_selected.connect(func(id: String):
 		theme_id = id
-		arena.set_theme(id))
+		arena.set_theme(id)
+		_apply_theme_audio())
 	hud.sound_toggled.connect(func(on: bool): AudioServer.set_bus_mute(0, not on))
 
 
 # ---------------------------------------------------------------- 对局管理
 
-func _start_match(mode: int, level: int, selected_theme: String) -> void:
+func _start_match(mode: int, level: int, selected_theme: String, cells := 40, styles: Array = []) -> void:
 	game_mode = mode
 	ai_level = level
 	theme_id = selected_theme
+	board_cells = clampi(cells, 20, 60)
+	var new_styles: Array = []
+	for t in 4:
+		var s := t
+		if t < styles.size():
+			s = int(styles[t])
+		new_styles.append(clampi(s, 0, 7))
+	var styles_changed := new_styles != char_styles
+	char_styles = new_styles
+	if board_cells != FIELDS:
+		_apply_board_size(board_cells)
+		_rebuild_arena()
+	elif styles_changed:
+		_rebuild_pieces()
 	arena.set_theme(theme_id)
 	human_teams = [0] if mode == 0 else [0, 1, 2, 3]
 	match_started = true
@@ -268,9 +430,16 @@ func _start_match(mode: int, level: int, selected_theme: String) -> void:
 	frozen = [0, 0, 0, 0]
 	last_dice = 0
 	current_team = 0
+	turn_count = 0
+	roulette_used = false
+	roulette_open = false
+	_roulette_segments = []
 	cards = [[], [], [], []]
 	captures = [0, 0, 0, 0]
 	rolls = [0, 0, 0, 0]
+	drops = {}
+	event_cells = {}
+	arena.clear_random_marks()
 	for p in pieces:
 		p["cell"] = -1
 		p["finished"] = false
@@ -285,10 +454,13 @@ func _start_match(mode: int, level: int, selected_theme: String) -> void:
 	if hud:
 		hud.hide_win()
 		hud.hide_pick()
+		hud.hide_roulette()
 		hud.set_dice(0)
+	_apply_theme_audio()
+	_seed_random_marks()
 	_update_all()
 	_log("———— 新对局 ————")
-	_log("主题：%s" % ["暮色竞技场", "霜封荒原", "熔火深渊"][["dusk", "frost", "ember"].find(theme_id)])
+	_log("主题：%s · 棋盘：%d 格" % [["暮色竞技场", "霜封荒原", "熔火深渊"][["dusk", "frost", "ember"].find(theme_id)], FIELDS])
 	_log("掷出 6 点出基地，精确点数进终点")
 	if mode == 0:
 		_log("AI 难度：%s" % ["简单", "普通", "困难"][ai_level])
@@ -364,12 +536,24 @@ func _legal_moves(total: int) -> Array:
 	return out
 
 
+func _cell_step() -> int:
+	return maxi(FIELDS / 4, 1)
+
+
 func _is_safe_cell(cell: int) -> bool:
-	return cell >= 0 and cell % 10 == 0
+	return cell >= 0 and cell % _cell_step() == 0
 
 
 func _is_treasure_cell(cell: int) -> bool:
-	return cell >= 0 and cell % 10 == 5
+	return cell >= 0 and cell % _cell_step() == _cell_step() / 2
+
+
+func _is_portal_cell(cell: int) -> bool:
+	return cell >= 0 and cell % _cell_step() == _cell_step() * 3 / 10
+
+
+func _is_thorn_cell(cell: int) -> bool:
+	return cell >= 0 and cell % _cell_step() == _cell_step() * 7 / 10
 
 
 func _resolve_capture(p: Dictionary) -> bool:
@@ -586,22 +770,177 @@ func _move_piece(idx: int, steps: int) -> void:
 	var p: Dictionary = pieces[idx]
 	var captured: bool = await _advance(p, steps)
 	if not p["finished"]:
-		# 安全区机制：踏入安全格自动获得一层护盾
-		if not p["shield"] and _is_safe_cell(p["cell"]):
-			p["shield"] = true
-			arena.add_shield(p["node"])
-			arena.item_cast(p["node"], Color("8fe6ff"), "shield")
-			hud.show_item_toast("安全区", "踏入安全区，获得一层护盾", Color("8fe6ff"))
-			_log("%s 的 %d 号棋子进入安全区，获得护盾" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
-		if _is_treasure_cell(p["cell"]):
-			await _trigger_event(p)
-		_check_win(p["team"])
+		await _on_land(p, 0)
 	else:
 		_check_win(p["team"])
 	_update_all()
 	if game_over:
 		return
 	_finish_turn(last_dice == 6 or captured)
+
+
+## 落点结算：随机掉落 → 随机事件格 → 固定地形（秘宝/传送/荆棘/安全）
+func _on_land(p: Dictionary, depth: int) -> void:
+	if p["finished"] or p["cell"] < 0:
+		return
+	var ri := _ring_idx(p)
+	if ri >= 0 and drops.has(ri):
+		await _collect_drop(p, ri)
+		if p["finished"]:
+			return
+	if p["cell"] < 0:
+		return
+	ri = _ring_idx(p)
+	if ri >= 0 and event_cells.has(ri):
+		await _consume_event_cell(p, ri)
+		if p["finished"]:
+			return
+	if p["cell"] < 0:
+		return
+	var cell: int = p["cell"]
+	if _is_treasure_cell(cell):
+		await _trigger_event(p)
+		if p["finished"] or p["cell"] < 0:
+			return
+	if _is_portal_cell(p["cell"]):
+		await _portal_jump(p)
+		if p["finished"] or p["cell"] < 0:
+			return
+		if depth < 1:
+			await _on_land(p, depth + 1)
+		return
+	if _is_thorn_cell(p["cell"]):
+		await _thorn_punish(p)
+	if p["finished"] or p["cell"] < 0:
+		return
+	# 安全格：踏入自动获得一层护盾
+	if not p["shield"] and _is_safe_cell(p["cell"]):
+		p["shield"] = true
+		arena.add_shield(p["node"])
+		arena.item_cast(p["node"], Color("8fe6ff"), "shield")
+		hud.show_item_toast("安全区", "踏入安全区，获得一层护盾", Color("8fe6ff"))
+		_log("%s 的 %d 号棋子进入安全区，获得护盾" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
+
+
+func _collect_drop(p: Dictionary, ri: int) -> void:
+	var info: Dictionary = drops.get(ri, {})
+	drops.erase(ri)
+	if info.has("node"):
+		arena.remove_drop(info["node"])
+	var pos: Vector3 = p["node"].position
+	var got := _draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))
+	arena.item_pickup(Vector3(pos.x, BOARD_Y, pos.z), Color("ffe066"))
+	arena.piece_celebrate(p["node"])
+	_play(sfx_drop)
+	hud.screen_flash(Color("ffe066"), 0.16)
+	if not got:
+		hud.show_item_toast("掉 落", "%s 卡槽已满，道具化为尘光" % TEAM_NAMES[p["team"]], Color("ffe066"))
+	_log("%s 拾取了随机掉落的道具" % TEAM_NAMES[p["team"]])
+	await get_tree().create_timer(0.45).timeout
+	if drops.size() < 2:
+		_spawn_random_drop()
+
+
+func _consume_event_cell(p: Dictionary, ri: int) -> void:
+	var info: Dictionary = event_cells.get(ri, {})
+	event_cells.erase(ri)
+	if info.has("node"):
+		arena.remove_event_cell(info["node"])
+	var forced: String = String(info.get("id", ""))
+	await _trigger_event(p, forced, false)
+	if event_cells.size() < 2:
+		_spawn_random_event_cell()
+
+
+func _portal_jump(p: Dictionary) -> void:
+	var from: int = p["cell"]
+	var to := mini(from + 4, FIELDS - 1)
+	if to == from:
+		return
+	p["cell"] = to
+	arena.item_cast(p["node"], Color("b484ff"), "teleport")
+	arena.event_ring(p["node"].position, Color("b484ff"))
+	await _hop_to(p, _piece_cell_pos(p))
+	hud.show_item_toast("传 送 门", "%s 的 %d 号棋子被传送到第 %d 格" % [
+		TEAM_NAMES[p["team"]], p["idx"] + 1, to + 1], Color("b484ff"))
+	hud.screen_flash(Color("b484ff"), 0.22)
+	_log("%s 的 %d 号棋子踏入传送门，前进 4 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
+	if p["cell"] >= FIELDS - 1:
+		await _finish_piece(p)
+
+
+func _thorn_punish(p: Dictionary) -> void:
+	var back := mini(2, int(p["cell"]))
+	if back <= 0:
+		return
+	p["cell"] = int(p["cell"]) - back
+	arena.piece_hit(p["node"])
+	arena.freeze_burst(Vector3(p["node"].position.x, BOARD_Y, p["node"].position.z), Color("ff5566"))
+	await _hop_to(p, _piece_cell_pos(p))
+	hud.show_item_toast("荆 棘 地", "被荆棘缠住，后退 %d 格" % back, Color("ff5566"))
+	hud.screen_flash(Color("ff5566"), 0.20)
+	_shake(0.2, 9.0)
+	_play(sfx_event)
+	_log("%s 的 %d 号棋子踩中荆棘，后退 %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1, back])
+	await get_tree().create_timer(0.4).timeout
+
+
+# ---------------------------------------------------------------- 随机掉落 / 事件格
+
+func _random_free_ring() -> int:
+	var candidates: Array = []
+	for i in FIELDS:
+		if drops.has(i) or event_cells.has(i):
+			continue
+		if _is_safe_cell(i) or _is_treasure_cell(i) or _is_portal_cell(i) or _is_thorn_cell(i):
+			continue
+		candidates.append(i)
+	if candidates.is_empty():
+		return -1
+	return int(candidates[randi() % candidates.size()])
+
+
+func _spawn_random_drop() -> void:
+	if drops.size() >= 4:
+		return
+	var ri := _random_free_ring()
+	if ri < 0:
+		return
+	var pname: String = paths[0][ri]
+	var node := arena.spawn_drop(_pt_pos(pname), arena.theme_accent())
+	drops[ri] = {"node": node}
+
+
+func _spawn_random_event_cell(forced := "") -> void:
+	if event_cells.size() >= 5:
+		return
+	var ri := _random_free_ring()
+	if ri < 0:
+		return
+	var id := forced
+	if id == "":
+		var pool := _roulette_event_pool()
+		id = pool[randi() % pool.size()]
+	var node := arena.spawn_event_cell(_pt_pos(paths[0][ri]),
+		EVENT_COLORS.get(id, Color.WHITE), String(EVENT_SYMBOLS.get(id, "?")))
+	event_cells[ri] = {"node": node, "id": id}
+
+
+## 回合开始按概率随机补充掉落与事件格
+func _maybe_spawn_random() -> void:
+	if randf() < 0.55:
+		_spawn_random_drop()
+	if randf() < 0.45:
+		_spawn_random_event_cell()
+	if randf() < 0.20:
+		_spawn_random_event_cell()
+
+
+func _seed_random_marks() -> void:
+	_spawn_random_drop()
+	_spawn_random_drop()
+	_spawn_random_event_cell()
+	_spawn_random_event_cell()
 
 
 func _finish_turn(extra: bool) -> void:
@@ -627,6 +966,9 @@ func _finish_turn(extra: bool) -> void:
 	else:
 		current_team = (current_team + 1) % 4
 		_skip_frozen()
+		roulette_used = false
+		turn_count += 1
+		_maybe_spawn_random()
 	hud.set_dice(0)
 	_update_all()
 	_maybe_ai_turn()
@@ -673,7 +1015,7 @@ func _on_card_pressed(slot: int) -> void:
 	if slot < 0 or slot >= cards[current_team].size():
 		return
 	var id: String = cards[current_team][slot]
-	if id == "boost" or id == "double" or id == "freeze":
+	if id == "boost" or id == "double" or id == "freeze" or id == "vortex" or id == "steal":
 		_use_instant_card(slot, id)
 		return
 
@@ -681,7 +1023,7 @@ func _on_card_pressed(slot: int) -> void:
 	for i in pieces.size():
 		var p: Dictionary = pieces[i]
 		# 需要指定对手的道具
-		if id == "snipe" or id == "frostlock":
+		if id == "snipe" or id == "frostlock" or id == "bomb":
 			if p["team"] != current_team and not p["finished"] and p["cell"] >= 1:
 				pool.append(i)
 			continue
@@ -697,6 +1039,8 @@ func _on_card_pressed(slot: int) -> void:
 				step = 2
 			"inferno":
 				step = 4
+			"gale":
+				step = 2
 		if step > 0 and int(p["cell"]) + step > FIELDS - 1:
 			continue
 		pool.append(i)
@@ -710,6 +1054,7 @@ func _on_card_pressed(slot: int) -> void:
 func _use_instant_card(slot: int, id: String) -> void:
 	var leader := _lead_piece(current_team)
 	var c: Color = ITEM_COLORS.get(id, Color.WHITE)
+	var desc_line := ""
 	match id:
 		"boost":
 			if boost_pending == current_team:
@@ -743,11 +1088,56 @@ func _use_instant_card(slot: int, id: String) -> void:
 				var vp: Dictionary = pieces[victim]
 				arena.freeze_burst(Vector3(vp["node"].position.x, BOARD_Y, vp["node"].position.z), Color("9fe8ff"))
 				arena.item_cast(vp["node"], Color("7fe6ff"), "freeze")
+		"vortex":
+			cards[current_team].remove_at(slot)
+			var pushed := 0
+			for q in pieces:
+				if q["team"] == current_team or q["finished"] or q["cell"] <= 0:
+					continue
+				q["cell"] = int(q["cell"]) - 1
+				arena.piece_hit(q["node"])
+				await _hop_to(q, _piece_cell_pos(q))
+				arena.event_ring(q["node"].position, Color("9a7bff"))
+				arena.freeze_burst(Vector3(q["node"].position.x, BOARD_Y, q["node"].position.z), Color("9a7bff"))
+				pushed += 1
+			desc_line = "%d 枚对手棋子被卷入漩涡，后退 1 格" % pushed
+			hud.screen_flash(Color("9a7bff"), 0.3)
+			_shake(0.3, 16.0)
+			_log("%s 使用「漩涡」，卷退 %d 枚对手棋子" % [TEAM_NAMES[current_team], pushed])
+		"steal":
+			var victim_t := -1
+			var most := 0
+			for t in 4:
+				if t == current_team:
+					continue
+				if cards[t].size() > most:
+					most = cards[t].size()
+					victim_t = t
+			if victim_t < 0 or most <= 0:
+				_play(nope_player)
+				hud.show_item_toast("窃取失败", "对手手中没有道具卡", Color("ffb84a"))
+				return
+			if cards[current_team].size() >= 4:
+				_play(nope_player)
+				hud.show_item_toast("窃取失败", "你的卡槽已满", Color("ffb84a"))
+				return
+			cards[current_team].remove_at(slot)
+			var pick: int = randi() % cards[victim_t].size()
+			var got: String = cards[victim_t][pick]
+			cards[victim_t].remove_at(pick)
+			cards[current_team].append(got)
+			var vp2 := _lead_piece(victim_t)
+			if vp2 >= 0:
+				arena.snipe_streak(pieces[vp2]["node"].position, _team_front_pos(current_team), Color("ffb84a"))
+			desc_line = "从 %s 手中抢到了「%s」" % [TEAM_NAMES[victim_t], ITEM_NAMES.get(got, got)]
+			hud.screen_flash(Color("ffb84a"), 0.26)
+			_log("%s 使用「窃取」，从 %s 手中抢到「%s」" % [TEAM_NAMES[current_team],
+				TEAM_NAMES[victim_t], ITEM_NAMES.get(got, got)])
 	if leader >= 0:
 		var lp: Dictionary = pieces[leader]
 		arena.item_cast(lp["node"], c, id)
 		arena.piece_celebrate(lp["node"])
-		hud.show_item_toast("使用「%s」" % ITEM_NAMES[id], ITEM_DESC.get(id, ""), c)
+	hud.show_item_toast("使用「%s」" % ITEM_NAMES[id], desc_line if desc_line != "" else ITEM_DESC.get(id, ""), c)
 	hud.screen_flash(c, 0.20)
 	_play(click_player)
 	_update_all()
@@ -799,6 +1189,8 @@ func _show_card_pick(pool: Array, hint: String) -> void:
 					step = 2
 				"inferno":
 					step = 4
+				"gale":
+					step = 2
 			if step > 0 and int(p["cell"]) + step == FIELDS - 1:
 				label += " · 直达终点"
 		else:
@@ -834,7 +1226,7 @@ func _apply_card(idx: int) -> void:
 		_show_card_pick(pool, "再选择一名对手棋子进行换位")
 		return
 
-	if id == "snipe":
+	if id == "snipe" or id == "bomb" or id == "frostlock":
 		if p["team"] == current_team or p["finished"] or p["cell"] < 0:
 			return
 	elif id != "swap":
@@ -995,6 +1387,43 @@ func _apply_card(idx: int) -> void:
 			if not game_over:
 				_finish_turn(cap_i)
 			return
+		"gale":
+			var steps_g := mini(2, FIELDS - 1 - int(p["cell"]))
+			var cap_g: bool = await _advance(p, steps_g)
+			arena.item_cast(p["node"], Color("8ff0c0"), "gale")
+			arena.piece_celebrate(p["node"])
+			hud.show_item_toast("使用「疾风」", "前进 %d 格，并获得一次额外掷骰" % steps_g, Color("8ff0c0"))
+			hud.screen_flash(Color("8ff0c0"), 0.22)
+			_log("%s 的 %d 号棋子乘风前进 %d 格，将再掷一次" % [
+				TEAM_NAMES[p["team"]], p["idx"] + 1, steps_g])
+			_check_win(p["team"])
+			_update_all()
+			if not game_over:
+				_finish_turn(true)
+			return
+		"bomb":
+			var bpos := Vector3(p["node"].position.x, BOARD_Y, p["node"].position.z)
+			if p["shield"]:
+				p["shield"] = false
+				arena.remove_shield(p["node"])
+				arena.freeze_burst(bpos, Color("ff6a3c"))
+				hud.show_item_toast("炸弹被挡下", "%s 的护盾抵消了爆炸" % TEAM_NAMES[p["team"]], Color("ff6a3c"))
+				_log("%s 的 %d 号棋子用护盾挡下了炸弹" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
+			else:
+				arena.capture_blast(bpos, Color("ff6a3c"))
+				arena.event_ring(bpos, Color("ff6a3c"))
+				p["cell"] = -1
+				p["node"].position = _pt_pos("HM%d_%d" % [p["team"] + 1, p["idx"] + 1])
+				arena.piece_hit(p["node"])
+				hud.show_item_toast("使用「炸弹」", "%s 的 %d 号棋子被炸回基地" % [TEAM_NAMES[p["team"]], p["idx"] + 1], Color("ff6a3c"))
+				hud.screen_flash(Color("ff6a3c"), 0.4)
+				_shake(0.45, 26.0)
+				_log("%s 用炸弹把 %s 的 %d 号棋子炸回基地" % [TEAM_NAMES[current_team],
+					TEAM_NAMES[p["team"]], p["idx"] + 1])
+			_play(sfx_boom)
+			_update_all()
+			_resume_after_card()
+			return
 
 
 func _cancel_card() -> void:
@@ -1018,21 +1447,33 @@ func _resume_after_card() -> void:
 
 # ---------------------------------------------------------------- 随机事件
 
-func _trigger_event(p: Dictionary) -> void:
-	var pool: Array = EVENT_POOL.duplicate()
-	var exclusive: String = THEME_EVENT.get(theme_id, "")
-	if exclusive != "":
-		pool.append(exclusive)
-		pool.append(exclusive)
-	var id: String = pool[randi() % pool.size()]
+func _trigger_event(p: Dictionary, forced := "", dramatic := false) -> void:
+	var pool: Array = _roulette_event_pool()
+	var id := forced
+	if id == "":
+		id = pool[randi() % pool.size()]
 	var team: int = p["team"]
 	var title: String = EVENT_TITLES[id]
 	var color: Color = EVENT_COLORS[id]
 	var desc := ""
+	# 轮盘触发时若己方没有棋子在场，自动改判为全局事件
+	if p["cell"] < 0 and (id in ["tailwind", "trap", "portal", "bless", "starlight"]):
+		var globals := ["meteor", "chaos", "goldrain", "earthquake", "ambush"]
+		id = globals[randi() % globals.size()]
+		title = EVENT_TITLES[id]
+		color = EVENT_COLORS[id]
 	var pos: Vector3 = p["node"].position
+	var pi := _ring_idx(p)
 	arena.event_ring(pos, color)
 	arena.item_aura(p["node"], color)
-	hud.screen_flash(color, 0.18)
+	if dramatic:
+		arena.roulette_blast(Vector3(pos.x, BOARD_Y, pos.z), color)
+		hud.screen_flash(color, 0.55)
+		_shake(0.58, 32.0)
+		_play(sfx_boom)
+	else:
+		hud.screen_flash(color, 0.18)
+		_play(sfx_event)
 	match id:
 		"treasure":
 			if _draw_card(team, true, Vector3(pos.x, BOARD_Y, pos.z)):
@@ -1149,6 +1590,69 @@ func _trigger_event(p: Dictionary) -> void:
 				hitn += 1
 			_shake(0.34, 20.0)
 			desc = "火山喷发，%d 枚棋子被冲击波掀退 2 格" % hitn
+		"ambush":
+			var victims: Array = []
+			for i in pieces.size():
+				var q: Dictionary = pieces[i]
+				if q["team"] == team or q["finished"] or q["cell"] <= 0:
+					continue
+				if pi >= 0:
+					var qi := _ring_idx(q)
+					if qi >= 0:
+						var gap := absi(qi - pi)
+						gap = mini(gap, FIELDS - gap)
+						if gap > 4:
+							continue
+				victims.append(i)
+			victims.shuffle()
+			var hitc := 0
+			for k in mini(3, victims.size()):
+				var q3: Dictionary = pieces[victims[k]]
+				var back3 := mini(3, int(q3["cell"]))
+				if back3 <= 0:
+					continue
+				q3["cell"] = int(q3["cell"]) - back3
+				arena.piece_hit(q3["node"])
+				arena.capture_blast(Vector3(q3["node"].position.x, BOARD_Y, q3["node"].position.z), color)
+				await _hop_to(q3, _piece_cell_pos(q3))
+				hitc += 1
+			_shake(0.36, 24.0)
+			desc = "伏兵四起！%d 枚对手棋子被突袭后退 3 格" % hitc
+		"goldrain":
+			var got := 0
+			for t in 4:
+				if _draw_card(t, true):
+					got += 1
+			arena.item_pickup(Vector3(pos.x, BOARD_Y, pos.z), color)
+			desc = "金色暴雨倾泻而下，全场共获得 %d 张道具卡" % got
+		"earthquake":
+			var moved_q := 0
+			for q in pieces:
+				if q["finished"] or q["cell"] <= 0:
+					continue
+				q["cell"] = int(q["cell"]) - 1
+				arena.piece_hit(q["node"])
+				await _hop_to(q, _piece_cell_pos(q))
+				moved_q += 1
+			_shake(0.55, 28.0)
+			desc = "地动山摇，全场 %d 枚棋子被震退 1 格" % moved_q
+		"curse":
+			frozen[team] = maxi(frozen[team], 1)
+			var lead := _lead_piece(team)
+			var dragged := 0
+			if lead >= 0:
+				var q4: Dictionary = pieces[lead]
+				var back4 := mini(2, int(q4["cell"]))
+				if back4 > 0:
+					q4["cell"] = int(q4["cell"]) - back4
+					if q4["shield"]:
+						q4["shield"] = false
+						arena.remove_shield(q4["node"])
+					arena.piece_hit(q4["node"])
+					await _hop_to(q4, _piece_cell_pos(q4))
+					dragged = back4
+			_shake(0.3, 16.0)
+			desc = "诅咒降临，%s 下一回合被冻结，领先棋子被拖后 %d 格" % [TEAM_NAMES[team], dragged]
 
 	hud.show_event(title, desc, color)
 	_log("【%s】%s" % [title.replace(" ", ""), desc])
@@ -1180,6 +1684,98 @@ func _most_dangerous_opponent(team: int) -> int:
 			best_cell = prog
 			best = t
 	return best
+
+
+# ---------------------------------------------------------------- 俄罗斯轮盘
+
+func _roulette_event_pool() -> Array:
+	var pool: Array = EVENT_POOL.duplicate()
+	var ex: String = THEME_EVENT.get(theme_id, "")
+	if ex != "":
+		pool.append(ex)
+		pool.append(ex)
+	return pool
+
+
+func _on_roulette_requested() -> void:
+	if not match_started or game_over:
+		return
+	if _is_ai(current_team):
+		_play(nope_player)
+		hud.show_item_toast("俄 罗 斯 轮 盘", "AI 回合不能转动命运之轮", Color("ffd166"))
+		return
+	if busy or awaiting_pick or card_mode != "":
+		_play(nope_player)
+		hud.show_item_toast("俄 罗 斯 轮 盘", "先完成当前操作再转动轮盘", Color("ffd166"))
+		return
+	if roulette_used:
+		_play(nope_player)
+		hud.show_item_toast("俄 罗 斯 轮 盘", "本回合已经转动过一次，等下一回合吧", Color("ffd166"))
+		return
+	roulette_open = true
+	_roulette_segments = _build_roulette_segments()
+	hud.show_roulette(_roulette_segments)
+	_play(click_player)
+
+
+func _build_roulette_segments() -> Array:
+	var segs: Array = []
+	var t := current_team
+	for i in cards[t].size():
+		if segs.size() >= 5:
+			break
+		var id: String = cards[t][i]
+		segs.append({
+			"kind": "item", "id": id, "slot": i,
+			"label": ITEM_NAMES.get(id, id), "color": ITEM_COLORS.get(id, Color.WHITE),
+		})
+	var pool := _roulette_event_pool()
+	while segs.size() < 8:
+		var eid: String = pool[randi() % pool.size()]
+		segs.append({
+			"kind": "event", "id": eid, "slot": -1,
+			"label": String(EVENT_TITLES.get(eid, eid)).replace(" ", ""),
+			"color": EVENT_COLORS.get(eid, Color.WHITE),
+		})
+	segs.shuffle()
+	return segs
+
+
+func _pick_event_piece(team: int) -> Dictionary:
+	var lead := _lead_piece(team)
+	if lead >= 0:
+		return pieces[lead]
+	for p in pieces:
+		if p["team"] == team:
+			return p
+	return pieces[0]
+
+
+func _on_roulette_spun(idx: int) -> void:
+	roulette_open = false
+	roulette_used = true
+	hud.hide_roulette()
+	if idx < 0 or idx >= _roulette_segments.size():
+		_update_all()
+		return
+	var seg: Dictionary = _roulette_segments[idx]
+	_log("【轮盘】命运选中「%s」" % String(seg.get("label", "?")))
+	if String(seg.get("kind", "")) == "item":
+		var slot: int = int(seg.get("slot", -1))
+		if slot >= 0 and slot < cards[current_team].size():
+			_play(click_player)
+			_on_card_pressed(slot)
+		else:
+			_update_all()
+		return
+	# 命中事件：全屏炸裂演出
+	var target := _pick_event_piece(current_team)
+	await _trigger_event(target, String(seg.get("id", "")), true)
+	if game_over:
+		return
+	if card_mode != "" or busy:
+		return
+	_finish_turn(false)
 
 
 # ---------------------------------------------------------------- AI
@@ -1285,8 +1881,8 @@ func _ai_cards() -> void:
 		_update_all()
 		await get_tree().create_timer(0.25).timeout
 
-	# 传送 / 跃迁 / 冲锋 / 月影：能直达终点或吃子
-	for spec in [["teleport", 5], ["inferno", 4], ["warp", 3], ["moonstep", 2]]:
+	# 传送 / 跃迁 / 冲锋 / 月影 / 疾风：能直达终点或吃子
+	for spec in [["teleport", 5], ["inferno", 4], ["warp", 3], ["moonstep", 2], ["gale", 2]]:
 		var cid: String = spec[0]
 		var step: int = spec[1]
 		var si: int = cards[t].find(cid)
@@ -1389,6 +1985,80 @@ func _ai_cards() -> void:
 			_log("%s 使用「换位」" % TEAM_NAMES[t])
 			await _ai_swap(my_i, op_i)
 			return
+
+	# 炸弹：把对手最靠前的棋子炸回基地
+	var boi: int = cards[t].find("bomb")
+	if boi >= 0:
+		var bi2 := -1
+		var bc := 22
+		for i in pieces.size():
+			var q: Dictionary = pieces[i]
+			if q["team"] == t or q["finished"] or q["cell"] < bc:
+				continue
+			bc = q["cell"]
+			bi2 = i
+		if bi2 >= 0:
+			cards[t].remove_at(boi)
+			var bp: Dictionary = pieces[bi2]
+			_log("%s 使用「炸弹」" % TEAM_NAMES[t])
+			if bp["shield"]:
+				bp["shield"] = false
+				arena.remove_shield(bp["node"])
+				arena.freeze_burst(Vector3(bp["node"].position.x, BOARD_Y, bp["node"].position.z), Color("ff6a3c"))
+			else:
+				arena.capture_blast(Vector3(bp["node"].position.x, BOARD_Y, bp["node"].position.z), Color("ff6a3c"))
+				bp["cell"] = -1
+				bp["node"].position = _pt_pos("HM%d_%d" % [bp["team"] + 1, bp["idx"] + 1])
+				arena.piece_hit(bp["node"])
+			_play(sfx_boom)
+			hud.screen_flash(Color("ff6a3c"), 0.32)
+			_shake(0.4, 22.0)
+			_update_all()
+			await get_tree().create_timer(0.4).timeout
+
+	# 漩涡：多名对手领先时全体后退 1 格
+	var voi: int = cards[t].find("vortex")
+	if voi >= 0:
+		var ahead := 0
+		for q in pieces:
+			if q["team"] != t and not q["finished"] and q["cell"] > 8:
+				ahead += 1
+		if ahead >= 2:
+			cards[t].remove_at(voi)
+			_log("%s 使用「漩涡」" % TEAM_NAMES[t])
+			for q in pieces:
+				if q["team"] == t or q["finished"] or q["cell"] <= 0:
+					continue
+				q["cell"] = int(q["cell"]) - 1
+				arena.piece_hit(q["node"])
+				await _hop_to(q, _piece_cell_pos(q))
+				arena.event_ring(q["node"].position, Color("9a7bff"))
+			hud.screen_flash(Color("9a7bff"), 0.28)
+			_shake(0.26, 14.0)
+			_update_all()
+			await get_tree().create_timer(0.3).timeout
+
+	# 窃取：对手卡多时抢一张
+	var sti: int = cards[t].find("steal")
+	if sti >= 0 and cards[t].size() < 4:
+		var vt := -1
+		var vmost := 0
+		for ot in 4:
+			if ot == t:
+				continue
+			if cards[ot].size() > vmost:
+				vmost = cards[ot].size()
+				vt = ot
+		if vt >= 0 and vmost >= 2:
+			cards[t].remove_at(sti)
+			var pk: int = randi() % cards[vt].size()
+			var stole: String = cards[vt][pk]
+			cards[vt].remove_at(pk)
+			cards[t].append(stole)
+			_log("%s 使用「窃取」，抢到「%s」" % [TEAM_NAMES[t], ITEM_NAMES.get(stole, stole)])
+			hud.show_event("窃 取", "%s 从 %s 手中抢走一张道具卡" % [TEAM_NAMES[t], TEAM_NAMES[vt]], Color("ffb84a"))
+			_update_all()
+			await get_tree().create_timer(0.3).timeout
 
 	# 护盾：保护最靠前的棋子
 	var hi: int = cards[t].find("shield")
@@ -1604,10 +2274,25 @@ func _handle_pinch() -> void:
 	var a: Vector2 = _touches[keys[0]]
 	var b: Vector2 = _touches[keys[1]]
 	var d := a.distance_to(b)
-	if _pinch_dist > 1.0:
-		cam_dist = clampf(cam_dist * (_pinch_dist / maxf(d, 1.0)), 900.0, 4600.0)
-		_update_camera()
+	var mid := (a + b) * 0.5
+	if _pinch_dist <= 1.0:
+		_pinch_dist = d
+		_pinch_mid = mid
+		return
+	# 双指捏合缩放
+	cam_dist = clampf(cam_dist * (_pinch_dist / maxf(d, 1.0)), 900.0, 4600.0)
+	# 双指拖动：平移相机锚点（棋盘整体移动）
+	var delta := mid - _pinch_mid
+	if delta.length() > 0.5:
+		var k := cam_dist * 0.0016
+		var fwd := Vector3(-sin(cam_yaw), 0.0, -cos(cam_yaw))
+		var right := Vector3(cos(cam_yaw), 0.0, -sin(cam_yaw))
+		cam_target += (fwd * delta.y - right * delta.x) * k
+		cam_target.x = clampf(cam_target.x, -1500.0, 1500.0)
+		cam_target.z = clampf(cam_target.z, -1500.0, 1500.0)
+	_update_camera()
 	_pinch_dist = d
+	_pinch_mid = mid
 
 
 func _shake(duration := 0.26, amp := 12.0) -> void:
@@ -1637,6 +2322,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_touches.erase(event.index)
 			if _touches.size() < 2:
 				_pinch_dist = 0.0
+				_pinch_mid = Vector2.ZERO
 		return
 	if event is InputEventScreenDrag:
 		_using_touch = true
@@ -1705,6 +2391,22 @@ func _setup_showcase() -> void:
 	cards[0] = ["boost", "shield", "teleport", "snipe"]
 	captures = [2, 1, 0, 3]
 	rolls = [8, 8, 7, 9]
+	# 展示随机掉落与随机事件格
+	drops = {}
+	event_cells = {}
+	arena.clear_random_marks()
+	_spawn_random_drop()
+	_spawn_random_event_cell()
+	_spawn_random_event_cell()
+	var extra_ids := ["starlight", "blizzard", "eruption"]
+	var eid: String = extra_ids[["dusk", "frost", "ember"].find(theme_id)]
+	if eid == "":
+		eid = "starlight"
+	for ri in [2, 26]:
+		if event_cells.has(ri) or ri >= FIELDS:
+			continue
+		var node := arena.spawn_event_cell(_pt_pos(paths[0][ri]), EVENT_COLORS[eid], String(EVENT_SYMBOLS[eid]))
+		event_cells[ri] = {"node": node, "id": eid}
 	# 摆出"轮到红队、可走棋子高亮"的状态
 	var nodes: Array = []
 	var dests: Array = []
@@ -1716,6 +2418,17 @@ func _setup_showcase() -> void:
 	arena.show_movable(nodes, TEAM_COLORS[0])
 	arena.mark_tiles(dests, TEAM_COLORS[0])
 	arena.select_piece(pieces[0]["node"])
+	if hud:
+		var opts: Array = []
+		for i in 2:
+			var pp: Dictionary = pieces[i]
+			var cell_i: int = pp["cell"]
+			opts.append({
+				"index": i,
+				"label": "%d号 · %d → %d" % [i + 1, cell_i + 1, cell_i + 5],
+				"color": TEAM_COLORS[0],
+			})
+		hud.show_pick(opts, "掷出 4 点，点棋子或按钮选择")
 	_update_all()
 
 
