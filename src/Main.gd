@@ -1,14 +1,30 @@
 extends Node3D
 ## 骑士飞行棋 3 · 2026 重制版
 ## 场景：程序化天空竞技场（Arena.gd） / 界面：Hud.gd
-## 规则：40 格环道 · 掷 6 出基地 · 精确终点 · 安全格 · 宝箱格 · 三种道具卡 · 三档 AI
+## 规则：40 格环道 · 掷 6 出基地 · 精确终点 · 安全格 · 宝箱随机事件
+##       8 种道具 · 三套主题 · 三档 AI · 1v3 人机 / 4 人热座
 
 const TEAM_NAMES := ["红队", "蓝队", "绿队", "黄队"]
 const TEAM_COLORS := [Color("e0503f"), Color("3d8ae0"), Color("3fb96a"), Color("e0a92f")]
 const FIELDS := 40
 const PIECES_PER_TEAM := 4
 const BOARD_Y := 8.0
-const CARD_NAMES := {"boost": "加速", "shield": "护盾", "warp": "跃迁"}
+
+const ITEM_NAMES := {
+	"boost": "加速", "shield": "护盾", "warp": "跃迁", "snipe": "狙击",
+	"swap": "换位", "freeze": "冰冻", "double": "双倍", "teleport": "传送",
+}
+const ITEM_POOL := ["boost", "shield", "warp", "snipe", "swap", "freeze", "double", "teleport"]
+
+const EVENT_TITLES := {
+	"treasure": "秘 宝", "meteor": "陨 石", "tailwind": "顺 风", "trap": "陷 阱",
+	"portal": "传送门", "chaos": "混 沌", "bless": "祝 福",
+}
+const EVENT_COLORS := {
+	"treasure": Color("ffd166"), "meteor": Color("ff6a3c"), "tailwind": Color("7cf0a8"),
+	"trap": Color("ff5566"), "portal": Color("b484ff"), "chaos": Color("ff8ce0"),
+	"bless": Color("6cc6ff"),
+}
 
 var data: Dictionary = {}
 var pts: Dictionary = {}
@@ -27,27 +43,34 @@ var winner := -1
 var auto_mode := false
 var shot_path := ""
 var showcase := false
+var menu_mode := false
 
 var match_started := false
+var game_mode := 0
 var ai_level := 1
+var theme_id := "dusk"
 var human_teams: Array = [0]
 var cards: Array = [[], [], [], []]
 var captures: Array = [0, 0, 0, 0]
 var rolls: Array = [0, 0, 0, 0]
+var frozen: Array = [0, 0, 0, 0]
 var boost_pending := -1
+var double_team := -1
 var last_dice := 0
 var pending_total := 0
 var card_mode := ""
 var card_slot := -1
+var card_stage := 0
+var card_self := -1
+var _pick_pool: Array = []
 
 # 相机
 var cam_yaw := deg_to_rad(34.0)
-var cam_pitch := deg_to_rad(53.0)
-var cam_dist := 2820.0
-var cam_target := Vector3(0, -150, 0)
+var cam_pitch := deg_to_rad(55.0)
+var cam_dist := 3500.0
+var cam_target := Vector3(0, -60, 0)
 var camera: Camera3D
 var dragging := false
-var _cam_tween: Tween
 
 var dice_player: AudioStreamPlayer
 var click_player: AudioStreamPlayer
@@ -63,10 +86,14 @@ func _ready() -> void:
 	for a in all_args:
 		if a.begins_with("--shot="):
 			shot_path = a.substr(7)
+		elif a.begins_with("--theme="):
+			theme_id = a.substr(8)
 		elif a == "--auto":
 			auto_mode = true
 		elif a == "--showcase":
 			showcase = true
+		elif a == "--menu":
+			menu_mode = true
 
 	_load_data()
 	_setup_world()
@@ -75,8 +102,8 @@ func _ready() -> void:
 	_spawn_pieces()
 	_setup_hud()
 
-	if auto_mode or shot_path != "":
-		_start_match(0, 1)
+	if (auto_mode or shot_path != "") and not menu_mode:
+		_start_match(0, 1, theme_id)
 		hud.hide_start()
 		if showcase:
 			_setup_showcase()
@@ -110,7 +137,7 @@ func _setup_world() -> void:
 	arena = Arena.new()
 	arena.name = "Arena"
 	add_child(arena)
-	arena.build(pts, paths[0], TEAM_COLORS)
+	arena.build(pts, paths[0], TEAM_COLORS, theme_id)
 
 
 func _setup_camera() -> void:
@@ -178,12 +205,16 @@ func _setup_hud() -> void:
 	hud.card_pressed.connect(_on_card_pressed)
 	hud.piece_pressed.connect(_on_piece_pressed)
 	hud.start_pressed.connect(_start_match)
+	hud.theme_previewed.connect(func(id: String): arena.set_theme(id))
 
 
 # ---------------------------------------------------------------- 对局管理
 
-func _start_match(mode: int, level: int) -> void:
+func _start_match(mode: int, level: int, selected_theme: String) -> void:
+	game_mode = mode
 	ai_level = level
+	theme_id = selected_theme
+	arena.set_theme(theme_id)
 	human_teams = [0] if mode == 0 else [0, 1, 2, 3]
 	match_started = true
 	game_over = false
@@ -192,7 +223,12 @@ func _start_match(mode: int, level: int) -> void:
 	awaiting_pick = false
 	card_mode = ""
 	card_slot = -1
+	card_stage = 0
+	card_self = -1
+	_pick_pool = []
 	boost_pending = -1
+	double_team = -1
+	frozen = [0, 0, 0, 0]
 	last_dice = 0
 	current_team = 0
 	cards = [[], [], [], []]
@@ -207,23 +243,26 @@ func _start_match(mode: int, level: int) -> void:
 		arena.remove_shield(p["node"])
 	arena.clear_marks()
 	arena.clear_piece_marks()
+	arena.clear_movable()
+	arena.clear_selection()
 	if hud:
 		hud.hide_win()
 		hud.hide_pick()
 		hud.set_dice(0)
 	_update_all()
 	_log("———— 新对局 ————")
+	_log("主题：%s" % ["暮色竞技场", "霜封荒原", "熔火深渊"][["dusk", "frost", "ember"].find(theme_id)])
 	_log("掷出 6 点出基地，精确点数进终点")
-	if ai_level >= 0 and mode == 0:
+	if mode == 0:
 		_log("AI 难度：%s" % ["简单", "普通", "困难"][ai_level])
 	_maybe_ai_turn()
 
 
 func _reset_view() -> void:
 	cam_yaw = deg_to_rad(34.0)
-	cam_pitch = deg_to_rad(53.0)
-	cam_dist = 2820.0
-	cam_target = Vector3(0, -150, 0)
+	cam_pitch = deg_to_rad(55.0)
+	cam_dist = 3500.0
+	cam_target = Vector3(0, -60, 0)
 	_update_camera()
 
 
@@ -262,6 +301,14 @@ func _ring_idx(p: Dictionary) -> int:
 	if p["cell"] < 0:
 		return -1
 	return int(ring_index.get(_path_point(p["team"], p["cell"]), -1))
+
+
+func _team_progress(team: int) -> int:
+	var best := -1
+	for p in pieces:
+		if p["team"] == team and not p["finished"] and p["cell"] > best:
+			best = p["cell"]
+	return best
 
 
 # ---------------------------------------------------------------- 规则
@@ -305,10 +352,11 @@ func _resolve_capture(p: Dictionary) -> bool:
 			_log("%s 的护盾挡下了攻击" % TEAM_NAMES[q["team"]])
 			arena.pulse(q["node"].position, Color("8fe6ff"))
 			continue
+		var pos: Vector3 = q["node"].position
 		q["cell"] = -1
 		q["node"].position = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
-		arena.burst(p["node"].position, TEAM_COLORS[q["team"]], 12)
-		arena.pulse(p["node"].position, TEAM_COLORS[p["team"]])
+		arena.capture_blast(pos, TEAM_COLORS[q["team"]])
+		_shake(0.26, 14.0)
 		captures[p["team"]] += 1
 		_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
 	if hit_any:
@@ -357,8 +405,11 @@ func _check_win(team: int) -> bool:
 	game_over = true
 	winner = team
 	awaiting_pick = false
+	_pick_pool = []
 	arena.clear_marks()
 	arena.clear_piece_marks()
+	arena.clear_movable()
+	arena.clear_selection()
 	hud.show_win("%s 胜利" % TEAM_NAMES[team], TEAM_COLORS[team],
 		"掷骰 %d 次 · 吃子 %d 次 · 抽卡 %d 张" % [rolls[team], captures[team], cards[team].size()])
 	_log("★ %s 全部棋子到达终点，获胜！" % TEAM_NAMES[team])
@@ -393,9 +444,13 @@ func _do_roll() -> void:
 	busy = true
 	awaiting_pick = false
 	card_mode = ""
+	card_stage = 0
+	_pick_pool = []
 	hud.hide_pick()
 	arena.clear_marks()
 	arena.clear_piece_marks()
+	arena.clear_movable()
+	arena.clear_selection()
 	hud.set_roll_enabled(false, "掷骰中…")
 	_update_all()
 
@@ -406,11 +461,14 @@ func _do_roll() -> void:
 	if boost_pending == current_team:
 		total += 2
 		boost_pending = -1
+	if double_team == current_team:
+		total *= 2
+		double_team = -1
 	pending_total = total
 	hud.set_dice(raw, total)
 	_play(dice_player)
 	_log("%s 掷出 %d 点%s" % [_team_display(current_team), raw,
-		"（加速 +2 → %d）" % total if total != raw else ""])
+		"（强化后 %d）" % total if total != raw else ""])
 	await arena.roll_dice(raw)
 
 	var legal := _legal_moves(total)
@@ -443,6 +501,8 @@ func _do_roll() -> void:
 
 func _show_move_pick(legal: Array, total: int) -> void:
 	var options: Array = []
+	var dests: Array = []
+	var nodes: Array = []
 	for i in legal:
 		var p: Dictionary = pieces[i]
 		var label := ""
@@ -451,10 +511,13 @@ func _show_move_pick(legal: Array, total: int) -> void:
 		else:
 			label = "%d号 · %d → %d" % [p["idx"] + 1, p["cell"] + 1, p["cell"] + total + 1]
 		options.append({"index": i, "label": label, "color": TEAM_COLORS[p["team"]]})
-		arena.mark_piece(p["node"])
 		var dest: int = 0 if p["cell"] < 0 else int(p["cell"]) + total
-		arena.mark_tiles([_pt_pos(_path_point(p["team"], dest))], TEAM_COLORS[p["team"]])
-	hud.show_pick(options, "掷出 %d 点，选择棋子" % total)
+		dests.append(_pt_pos(_path_point(p["team"], dest)))
+		nodes.append(p["node"])
+	_pick_pool = legal
+	arena.mark_tiles(dests, TEAM_COLORS[current_team])
+	arena.show_movable(nodes, TEAM_COLORS[current_team])
+	hud.show_pick(options, "掷出 %d 点，点棋子或按钮选择" % total)
 
 
 func _on_piece_pressed(idx: int) -> void:
@@ -464,20 +527,27 @@ func _on_piece_pressed(idx: int) -> void:
 	if not awaiting_pick:
 		return
 	awaiting_pick = false
+	_pick_pool = []
 	hud.hide_pick()
 	arena.clear_piece_marks()
 	arena.clear_marks()
+	arena.clear_movable()
+	if idx >= 0 and idx < pieces.size():
+		var p: Dictionary = pieces[idx]
+		arena.select_piece(p["node"])
+		await get_tree().create_timer(0.16).timeout
+	arena.clear_selection()
 	await _move_piece(idx, pending_total)
 
 
 func _move_piece(idx: int, steps: int) -> void:
 	var p: Dictionary = pieces[idx]
 	var captured: bool = await _advance(p, steps)
-	if p["finished"]:
+	if not p["finished"]:
+		if _is_treasure_cell(p["cell"]):
+			await _trigger_event(p)
 		_check_win(p["team"])
 	else:
-		if _is_treasure_cell(p["cell"]):
-			_draw_card(p["team"])
 		_check_win(p["team"])
 	_update_all()
 	if game_over:
@@ -489,10 +559,17 @@ func _finish_turn(extra: bool) -> void:
 	busy = false
 	awaiting_pick = false
 	card_mode = ""
+	card_stage = 0
+	card_self = -1
 	card_slot = -1
+	_pick_pool = []
+	boost_pending = -1
+	double_team = -1
 	hud.hide_pick()
 	arena.clear_marks()
 	arena.clear_piece_marks()
+	arena.clear_movable()
+	arena.clear_selection()
 	if game_over:
 		_update_all()
 		return
@@ -500,20 +577,31 @@ func _finish_turn(extra: bool) -> void:
 		_log("%s 再掷一次" % _team_display(current_team))
 	else:
 		current_team = (current_team + 1) % 4
+		_skip_frozen()
 	hud.set_dice(0)
 	_update_all()
 	_maybe_ai_turn()
 
 
+func _skip_frozen() -> void:
+	var guard := 0
+	while frozen[current_team] > 0 and guard < 8:
+		frozen[current_team] -= 1
+		guard += 1
+		_log("%s 被冰冻，跳过本回合" % TEAM_NAMES[current_team])
+		hud.show_event("冰 冻", "%s 本回合被冻结，无法行动" % TEAM_NAMES[current_team], Color("7fe6ff"))
+		current_team = (current_team + 1) % 4
+
+
 # ---------------------------------------------------------------- 道具卡
 
-func _draw_card(team: int) -> bool:
-	if cards[team].size() >= 2:
+func _draw_card(team: int, quiet := false) -> bool:
+	if cards[team].size() >= 4:
 		return false
-	var pool := ["boost", "shield", "warp"]
-	var id: String = pool[randi() % pool.size()]
+	var id: String = ITEM_POOL[randi() % ITEM_POOL.size()]
 	cards[team].append(id)
-	_log("%s 获得道具「%s」" % [TEAM_NAMES[team], CARD_NAMES[id]])
+	if not quiet:
+		_log("%s 获得道具「%s」" % [TEAM_NAMES[team], ITEM_NAMES[id]])
 	_play(click_player)
 	_update_all()
 	return true
@@ -527,72 +615,318 @@ func _on_card_pressed(slot: int) -> void:
 	if slot >= cards[current_team].size():
 		return
 	var id: String = cards[current_team][slot]
-	if id == "boost":
-		if boost_pending == current_team:
-			_log("本回合已经使用过加速")
-			return
-		cards[current_team].remove_at(slot)
-		boost_pending = current_team
-		hud.set_dice(last_dice, last_dice + 2 if last_dice > 0 else 0)
-		_log("%s 使用「加速」，本回合点数 +2" % TEAM_NAMES[current_team])
-		_play(click_player)
-		_update_all()
+	if id == "boost" or id == "double" or id == "freeze":
+		_use_instant_card(slot, id)
 		return
-	# 护盾 / 跃迁 需要选棋子
-	var options: Array = []
+
+	var pool: Array = []
 	for i in pieces.size():
 		var p: Dictionary = pieces[i]
-		if p["team"] != current_team or p["finished"] or p["cell"] < 0:
+		if p["team"] != current_team or p["finished"]:
 			continue
-		if id == "warp" and p["cell"] + 3 > FIELDS - 1:
+		if p["cell"] < 0:
 			continue
-		var label := "%d号 · 第 %d 格" % [p["idx"] + 1, p["cell"] + 1]
-		if id == "warp" and p["cell"] + 3 == FIELDS - 1:
-			label += " · 直达终点"
-		options.append({"index": i, "label": label, "color": TEAM_COLORS[p["team"]]})
-		arena.mark_piece(p["node"])
-	if options.is_empty():
+		if (id == "warp" or id == "teleport"):
+			var step := 3 if id == "warp" else 5
+			if p["cell"] + step > FIELDS - 1:
+				continue
+		pool.append(i)
+	if pool.is_empty():
 		_play(nope_player)
-		_log("现在没有可以%s的棋子" % CARD_NAMES[id])
+		_log("现在没有可以%s的棋子" % ITEM_NAMES[id])
 		return
+	_enter_card_pick(id, slot, pool, "选择要使用「%s」的棋子" % ITEM_NAMES[id])
+
+
+func _use_instant_card(slot: int, id: String) -> void:
+	match id:
+		"boost":
+			if boost_pending == current_team:
+				_log("本回合已经使用过加速")
+				return
+			cards[current_team].remove_at(slot)
+			boost_pending = current_team
+			hud.set_dice(last_dice, last_dice + 2 if last_dice > 0 else 0)
+			_log("%s 使用「加速」，本回合点数 +2" % TEAM_NAMES[current_team])
+		"double":
+			if double_team == current_team:
+				return
+			cards[current_team].remove_at(slot)
+			double_team = current_team
+			_log("%s 使用「双倍」，本回合点数 ×2" % TEAM_NAMES[current_team])
+		"freeze":
+			var target := _most_dangerous_opponent(current_team)
+			if target < 0:
+				_play(nope_player)
+				_log("没有可以冰冻的对手")
+				return
+			cards[current_team].remove_at(slot)
+			frozen[target] = maxi(frozen[target], 1)
+			_log("%s 使用「冰冻」，%s 下一回合被冻结" % [TEAM_NAMES[current_team], TEAM_NAMES[target]])
+			hud.show_event("冰 冻", "%s 被冻结一轮" % TEAM_NAMES[target], Color("7fe6ff"))
+			arena.set_active_team(current_team)
+	_play(click_player)
+	_update_all()
+
+
+func _enter_card_pick(id: String, slot: int, pool: Array, hint: String) -> void:
 	card_mode = id
 	card_slot = slot
-	hud.show_pick(options, "选择要使用「%s」的棋子" % CARD_NAMES[id])
-	hud.set_roll_enabled(false)
+	card_stage = 0
+	card_self = -1
+	_pick_pool = pool
+	_show_card_pick(pool, hint)
 	busy = true
+	hud.set_roll_enabled(false)
 	_update_all()
+
+
+func _show_card_pick(pool: Array, hint: String) -> void:
+	var options: Array = []
+	for i in pool:
+		var p: Dictionary = pieces[i]
+		var label := ""
+		if card_mode == "swap" and card_stage == 1:
+			label = "%s%d号 · 第 %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1, p["cell"] + 1]
+		elif p["team"] == current_team:
+			label = "%d号 · 第 %d 格" % [p["idx"] + 1, p["cell"] + 1]
+			if card_mode == "warp" or card_mode == "teleport":
+				var step := 3 if card_mode == "warp" else 5
+				if p["cell"] + step == FIELDS - 1:
+					label += " · 直达终点"
+		else:
+			label = "%s%d号 · 第 %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1, p["cell"] + 1]
+		options.append({"index": i, "label": label, "color": TEAM_COLORS[p["team"]]})
+		arena.mark_piece(p["node"])
+	hud.show_pick(options, hint)
 
 
 func _apply_card(idx: int) -> void:
 	var p: Dictionary = pieces[idx]
-	if p["team"] != current_team or p["finished"]:
-		return
 	var id := card_mode
+
+	# 换位：第一步先选自己的棋子，第二步选对手
+	if id == "swap" and card_stage == 0:
+		if p["team"] != current_team or p["finished"] or p["cell"] < 0:
+			return
+		card_self = idx
+		card_stage = 1
+		var pool: Array = []
+		for i in pieces.size():
+			var q: Dictionary = pieces[i]
+			if q["team"] == current_team or q["finished"] or q["cell"] < 0:
+				continue
+			pool.append(i)
+		if pool.is_empty():
+			_log("没有可以换位的对手棋子")
+			_cancel_card()
+			return
+		_pick_pool = pool
+		arena.clear_piece_marks()
+		arena.select_piece(p["node"])
+		_show_card_pick(pool, "再选择一名对手棋子进行换位")
+		return
+
+	if id == "snipe":
+		if p["team"] == current_team or p["finished"] or p["cell"] < 0:
+			return
+	elif id != "swap":
+		if p["team"] != current_team or p["finished"] or p["cell"] < 0:
+			return
+
 	var slot := card_slot
 	card_mode = ""
+	card_stage = 0
+	card_self = -1
 	card_slot = -1
-	awaiting_pick = false
+	_pick_pool = []
 	hud.hide_pick()
 	arena.clear_piece_marks()
+	arena.clear_selection()
 	busy = false
 	if slot >= 0 and slot < cards[current_team].size():
 		cards[current_team].remove_at(slot)
-	if id == "shield":
-		p["shield"] = true
-		arena.add_shield(p["node"])
-		arena.flash_piece(p["node"])
-		_log("%s 的 %d 号棋子获得护盾" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
-		_play(click_player)
-		_update_all()
-		return
-	var captured: bool = await _advance(p, 3)
-	_log("%s 的 %d 号棋子跃迁 3 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
-	if captured:
-		_log("跃迁落点吃掉了对手")
-	_check_win(p["team"])
+
+	var color: Color = TEAM_COLORS[p["team"]]
+
+	match id:
+		"shield":
+			p["shield"] = true
+			arena.add_shield(p["node"])
+			arena.flash_piece(p["node"])
+			arena.item_aura(p["node"], Color("6cc6ff"))
+			_log("%s 的 %d 号棋子获得护盾" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
+			_play(click_player)
+			_update_all()
+			return
+		"warp", "teleport":
+			var steps := 3 if id == "warp" else 5
+			var captured: bool = await _advance(p, steps)
+			arena.item_aura(p["node"], color)
+			_log("%s 的 %d 号棋子%s %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1,
+				"跃迁" if id == "warp" else "传送", steps])
+			if captured:
+				_log("落点吃掉了对手")
+			_check_win(p["team"])
+			_update_all()
+			if not game_over:
+				_finish_turn(false)
+			return
+		"snipe":
+			var back := mini(3, int(p["cell"]))
+			p["cell"] -= back
+			await _hop_to(p, _piece_cell_pos(p))
+			arena.item_aura(p["node"], Color("ff5566"))
+			arena.event_ring(p["node"].position, Color("ff5566"))
+			_log("%s 狙击 %s 的 %d 号棋子，击退 %d 格" % [TEAM_NAMES[current_team],
+				TEAM_NAMES[p["team"]], p["idx"] + 1, back])
+			_play(click_player)
+			_update_all()
+			_resume_after_card()
+			return
+		"swap":
+			var mine: Dictionary = pieces[card_self]
+			var my_cell: int = mine["cell"]
+			var op_cell: int = p["cell"]
+			mine["cell"] = op_cell
+			p["cell"] = my_cell
+			await _hop_to(mine, _piece_cell_pos(mine))
+			await _hop_to(p, _piece_cell_pos(p))
+			arena.event_ring(mine["node"].position, Color("ffd166"))
+			arena.event_ring(p["node"].position, Color("ffd166"))
+			_log("%s 与 %s 交换了棋子位置" % [TEAM_NAMES[current_team], TEAM_NAMES[p["team"]]])
+			_play(click_player)
+			_update_all()
+			_resume_after_card()
+			return
+
+
+func _cancel_card() -> void:
+	card_mode = ""
+	card_stage = 0
+	card_self = -1
+	card_slot = -1
+	_pick_pool = []
+	hud.hide_pick()
+	arena.clear_piece_marks()
+	arena.clear_selection()
+	busy = false
 	_update_all()
-	if not game_over:
-		_finish_turn(false)
+
+
+func _resume_after_card() -> void:
+	busy = false
+	_update_all()
+	_maybe_ai_turn()
+
+
+# ---------------------------------------------------------------- 随机事件
+
+func _trigger_event(p: Dictionary) -> void:
+	var keys: Array = EVENT_TITLES.keys()
+	var id: String = keys[randi() % keys.size()]
+	var team: int = p["team"]
+	var title: String = EVENT_TITLES[id]
+	var color: Color = EVENT_COLORS[id]
+	var desc := ""
+	var pos: Vector3 = p["node"].position
+	arena.event_ring(pos, color)
+	match id:
+		"treasure":
+			if _draw_card(team, true):
+				desc = "%s 获得一张「%s」道具卡" % [TEAM_NAMES[team], ITEM_NAMES[cards[team][cards[team].size() - 1]]]
+			else:
+				desc = "%s 卡槽已满，秘宝化为金币" % TEAM_NAMES[team]
+		"meteor":
+			var moved := 0
+			for q in pieces:
+				if q["team"] == team or q["finished"] or q["cell"] < 0:
+					continue
+				var back := mini(2, int(q["cell"]))
+				if back <= 0:
+					continue
+				q["cell"] -= back
+				await _hop_to(q, _piece_cell_pos(q))
+				arena.pulse(q["node"].position, Color("ff6a3c"))
+				moved += 1
+			desc = "陨石砸落，%d 枚对手棋子后退 2 格" % moved
+		"tailwind":
+			var before: int = p["cell"]
+			await _event_move(p, 2)
+			desc = "%s 的 %d 号棋子顺风前进 %d 格" % [TEAM_NAMES[team], p["idx"] + 1, int(p["cell"]) - before]
+		"trap":
+			var before2: int = p["cell"]
+			await _event_move(p, -3)
+			desc = "%s 的 %d 号棋子踩中陷阱，后退 %d 格" % [TEAM_NAMES[team], p["idx"] + 1, before2 - int(p["cell"])]
+		"portal":
+			var target := -1
+			for c in range(int(p["cell"]) + 1, FIELDS):
+				if _is_safe_cell(c):
+					target = c
+					break
+			if target < 0:
+				desc = "传送门黯淡无光，什么也没发生"
+			else:
+				var before3: int = p["cell"]
+				p["cell"] = target
+				await _hop_to(p, _piece_cell_pos(p))
+				arena.pulse(p["node"].position, Color("b484ff"))
+				desc = "%s 的 %d 号棋子被传送到第 %d 格安全区（+%d）" % [TEAM_NAMES[team],
+					p["idx"] + 1, target + 1, target - before3]
+		"chaos":
+			var moved2 := 0
+			for q in pieces:
+				if q["finished"] or q["cell"] < 0:
+					continue
+				var d := randi_range(-2, 2)
+				if d == 0:
+					continue
+				var before4: int = q["cell"]
+				q["cell"] = clampi(int(q["cell"]) + d, 0, FIELDS - 1)
+				if q["cell"] == before4:
+					continue
+				await _hop_to(q, _piece_cell_pos(q))
+				arena.pulse(q["node"].position, Color("ff8ce0"))
+				moved2 += 1
+			desc = "时空扭曲，%d 枚棋子被随机挪动" % moved2
+		"bless":
+			p["shield"] = true
+			arena.add_shield(p["node"])
+			var got := _draw_card(team, true)
+			arena.item_aura(p["node"], Color("6cc6ff"))
+			desc = "%s 的 %d 号棋子获得护盾%s" % [TEAM_NAMES[team], p["idx"] + 1,
+				"，并获得一张道具卡" if got else "（卡槽已满）"]
+
+	hud.show_event(title, desc, color)
+	_log("【%s】%s" % [title.replace(" ", ""), desc])
+	_play(click_player)
+	await get_tree().create_timer(0.9).timeout
+
+	# 事件可能把棋子送到终点
+	if p["cell"] >= FIELDS - 1 and not p["finished"]:
+		await _finish_piece(p)
+
+
+func _event_move(p: Dictionary, delta: int) -> void:
+	var target := clampi(int(p["cell"]) + delta, 0, FIELDS - 1)
+	if target == p["cell"]:
+		return
+	p["cell"] = target
+	await _hop_to(p, _piece_cell_pos(p))
+	arena.pulse(p["node"].position, TEAM_COLORS[p["team"]])
+
+
+func _most_dangerous_opponent(team: int) -> int:
+	var best := -1
+	var best_cell := -1
+	for t in 4:
+		if t == team:
+			continue
+		var prog := _team_progress(t)
+		if prog > best_cell:
+			best_cell = prog
+			best = t
+	return best
 
 
 # ---------------------------------------------------------------- AI
@@ -646,16 +980,19 @@ func _ai_choose(legal: Array, total: int) -> int:
 
 
 func _maybe_ai_turn() -> void:
-	if game_over or busy or not match_started or not _is_ai(current_team):
+	if auto_mode or game_over or busy or not match_started or not _is_ai(current_team):
 		return
+	var team := current_team
 	await get_tree().create_timer(0.65).timeout
-	if game_over or busy or not _is_ai(current_team):
+	if game_over or busy or current_team != team or not _is_ai(current_team):
 		return
 	if ai_level >= 1:
 		await _ai_cards()
-	if game_over or busy:
+	if game_over or busy or current_team != team or not _is_ai(current_team):
 		return
 	await get_tree().create_timer(0.25).timeout
+	if game_over or busy or current_team != team:
+		return
 	await _do_roll()
 
 
@@ -663,65 +1000,127 @@ func _ai_cards() -> void:
 	var t := current_team
 	if cards[t].is_empty():
 		return
-	# 跃迁：能精确到终点，或能吃到对手
-	var warp_slot: int = cards[t].find("warp")
-	if warp_slot >= 0:
+	# 冰冻：对手已经快到终点
+	var fi: int = cards[t].find("freeze")
+	if fi >= 0:
+		var target := _most_dangerous_opponent(t)
+		if target >= 0 and _team_progress(target) >= 30:
+			cards[t].remove_at(fi)
+			frozen[target] = maxi(frozen[target], 1)
+			_log("%s 使用「冰冻」冻结 %s" % [TEAM_NAMES[t], TEAM_NAMES[target]])
+			hud.show_event("冰 冻", "%s 被冻结一轮" % TEAM_NAMES[target], Color("7fe6ff"))
+			_update_all()
+			await get_tree().create_timer(0.35).timeout
+
+	# 双倍 / 加速：有棋子接近终点时使用
+	var near_goal := false
+	for p in pieces:
+		if p["team"] == t and not p["finished"] and p["cell"] >= 0 and FIELDS - 1 - int(p["cell"]) <= 12:
+			near_goal = true
+	var di: int = cards[t].find("double")
+	if di >= 0 and (near_goal or ai_level >= 2):
+		cards[t].remove_at(di)
+		double_team = t
+		_log("%s 使用「双倍」" % TEAM_NAMES[t])
+		_update_all()
+		await get_tree().create_timer(0.25).timeout
+	var bi: int = cards[t].find("boost")
+	if bi >= 0 and (near_goal or ai_level >= 2):
+		cards[t].remove_at(bi)
+		boost_pending = t
+		_log("%s 使用「加速」" % TEAM_NAMES[t])
+		_update_all()
+		await get_tree().create_timer(0.25).timeout
+
+	# 传送 / 跃迁：能直达终点或吃子
+	for spec in [["teleport", 5], ["warp", 3]]:
+		var cid: String = spec[0]
+		var step: int = spec[1]
+		var si: int = cards[t].find(cid)
+		if si < 0:
+			continue
 		var pick := -1
 		var best := -1
 		for i in pieces.size():
 			var p: Dictionary = pieces[i]
 			if p["team"] != t or p["finished"] or p["cell"] < 0:
 				continue
-			if p["cell"] + 3 > FIELDS - 1:
+			if p["cell"] + step > FIELDS - 1:
 				continue
-			var target: int = int(p["cell"]) + 3
-			var point := _path_point(t, target)
-			var score: int = target
-			if target == FIELDS - 1:
+			var target2: int = int(p["cell"]) + step
+			var point := _path_point(t, target2)
+			var score: int = target2
+			if target2 == FIELDS - 1:
 				score += 500
 			for q in pieces:
 				if q["team"] == t or q["finished"] or q["cell"] < 0:
 					continue
-				if _path_point(q["team"], q["cell"]) == point and not _is_safe_cell(target):
+				if _path_point(q["team"], q["cell"]) == point and not _is_safe_cell(target2):
 					score += 800
 			if score > best:
 				best = score
 				pick = i
 		if pick >= 0 and best >= FIELDS - 1:
-			card_mode = "warp"
-			card_slot = warp_slot
-			busy = true
-			await get_tree().create_timer(0.35).timeout
-			busy = false
-			hud.log("%s 使用「跃迁」" % TEAM_NAMES[t])
-			await _apply_card(pick)
-			return
-	# 加速：有棋子离终点 4~8 格，或困难难度直接用
-	var boost_slot: int = cards[t].find("boost")
-	if boost_slot >= 0:
-		var useful := false
-		for p in pieces:
-			if p["team"] == t and not p["finished"] and p["cell"] >= 0:
-				var d: int = FIELDS - 1 - p["cell"]
-				if d >= 4 and d <= 8:
-					useful = true
-		if useful or ai_level >= 2:
-			cards[t].remove_at(boost_slot)
-			boost_pending = t
-			hud.log("%s 使用「加速」" % TEAM_NAMES[t])
-			_update_all()
+			cards[t].remove_at(si)
+			card_mode = cid
+			card_slot = -2
+			_log("%s 使用「%s」" % [TEAM_NAMES[t], ITEM_NAMES[cid]])
 			await get_tree().create_timer(0.3).timeout
+			await _apply_ai_displace(pick, step)
+			return
+
+	# 狙击：对手快进终点，把他打回去
+	var ni: int = cards[t].find("snipe")
+	if ni >= 0:
+		var best_i := -1
+		var best_cell := 25
+		for i in pieces.size():
+			var q: Dictionary = pieces[i]
+			if q["team"] == t or q["finished"] or q["cell"] < best_cell:
+				continue
+			best_cell = q["cell"]
+			best_i = i
+		if best_i >= 0:
+			cards[t].remove_at(ni)
+			_log("%s 使用「狙击」" % TEAM_NAMES[t])
+			await _ai_snipe(best_i)
+			return
+
+	# 换位：自己最落后，对手最靠前
+	var swi: int = cards[t].find("swap")
+	if swi >= 0:
+		var my_i := -1
+		var my_cell := 999
+		var op_i := -1
+		var op_cell := -1
+		for i in pieces.size():
+			var q: Dictionary = pieces[i]
+			if q["finished"] or q["cell"] < 0:
+				continue
+			if q["team"] == t:
+				if q["cell"] < my_cell:
+					my_cell = q["cell"]
+					my_i = i
+			elif q["cell"] > op_cell:
+				op_cell = q["cell"]
+				op_i = i
+		if my_i >= 0 and op_i >= 0 and op_cell - my_cell >= 8:
+			cards[t].remove_at(swi)
+			_log("%s 使用「换位」" % TEAM_NAMES[t])
+			await _ai_swap(my_i, op_i)
+			return
+
 	# 护盾：保护最靠前的棋子
-	var shield_slot: int = cards[t].find("shield")
-	if shield_slot >= 0:
+	var hi: int = cards[t].find("shield")
+	if hi >= 0:
 		var lead := -1
 		var lead_cell := -1
 		for i in pieces.size():
-			var p: Dictionary = pieces[i]
-			if p["team"] != t or p["finished"] or p["cell"] < 0 or p["shield"]:
+			var p2: Dictionary = pieces[i]
+			if p2["team"] != t or p2["finished"] or p2["cell"] < 0 or p2["shield"]:
 				continue
-			if p["cell"] > lead_cell:
-				lead_cell = p["cell"]
+			if p2["cell"] > lead_cell:
+				lead_cell = p2["cell"]
 				lead = i
 		var danger := false
 		if lead >= 0:
@@ -736,15 +1135,56 @@ func _ai_cards() -> void:
 				if gap >= 1 and gap <= 6:
 					danger = true
 		if lead >= 0 and (danger or ai_level >= 2):
-			cards[t].remove_at(shield_slot)
-			var p: Dictionary = pieces[lead]
-			p["shield"] = true
-			arena.add_shield(p["node"])
-			arena.flash_piece(p["node"])
-			hud.log("%s 使用「护盾」" % TEAM_NAMES[t])
+			cards[t].remove_at(hi)
+			var pc: Dictionary = pieces[lead]
+			pc["shield"] = true
+			arena.add_shield(pc["node"])
+			arena.flash_piece(pc["node"])
+			arena.item_aura(pc["node"], Color("6cc6ff"))
+			_log("%s 使用「护盾」" % TEAM_NAMES[t])
 			_play(click_player)
 			_update_all()
 			await get_tree().create_timer(0.3).timeout
+
+
+func _apply_ai_displace(idx: int, steps: int) -> void:
+	var p: Dictionary = pieces[idx]
+	var captured: bool = await _advance(p, steps)
+	arena.item_aura(p["node"], TEAM_COLORS[p["team"]])
+	_update_all()
+	if game_over:
+		return
+	if p["cell"] == FIELDS - 1:
+		_check_win(p["team"])
+		if game_over:
+			return
+	_finish_turn(false)
+
+
+func _ai_snipe(idx: int) -> void:
+	var p: Dictionary = pieces[idx]
+	var back := mini(3, int(p["cell"]))
+	p["cell"] -= back
+	await _hop_to(p, _piece_cell_pos(p))
+	arena.item_aura(p["node"], Color("ff5566"))
+	_log("%s 的 %d 号棋子被击退 %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1, back])
+	_update_all()
+	await get_tree().create_timer(0.35).timeout
+
+
+func _ai_swap(a: int, b: int) -> void:
+	var mine: Dictionary = pieces[a]
+	var other: Dictionary = pieces[b]
+	var my_cell: int = mine["cell"]
+	mine["cell"] = other["cell"]
+	other["cell"] = my_cell
+	await _hop_to(mine, _piece_cell_pos(mine))
+	await _hop_to(other, _piece_cell_pos(other))
+	arena.event_ring(mine["node"].position, Color("ffd166"))
+	arena.event_ring(other["node"].position, Color("ffd166"))
+	_log("%s 与 %s 交换了位置" % [TEAM_NAMES[mine["team"]], TEAM_NAMES[other["team"]]])
+	_update_all()
+	await get_tree().create_timer(0.35).timeout
 
 
 # ---------------------------------------------------------------- HUD / 状态
@@ -770,6 +1210,8 @@ func _update_all() -> void:
 	var can_roll := human and not busy and not awaiting_pick and not game_over and card_mode == "" and match_started
 	hud.set_roll_enabled(can_roll)
 	hud.set_cards(cards[current_team], human and not busy and not game_over and match_started)
+	if arena:
+		arena.set_active_team(current_team)
 
 
 func _log(text: String) -> void:
@@ -779,7 +1221,34 @@ func _log(text: String) -> void:
 		hud.log(text)
 
 
-# ---------------------------------------------------------------- 相机操作
+# ---------------------------------------------------------------- 选棋 / 相机
+
+func _try_world_pick(screen_pos: Vector2) -> void:
+	if not (awaiting_pick or card_mode != "") or _pick_pool.is_empty():
+		return
+	var origin := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if absf(dir.y) < 0.0001:
+		return
+	var t := (BOARD_Y + 46.0 - origin.y) / dir.y
+	if t <= 0.0:
+		return
+	var hit := origin + dir * t
+	var best := -1
+	var best_d := 88.0
+	for i in _pick_pool:
+		var p: Dictionary = pieces[i]
+		var node: Node3D = p["node"]
+		var d := Vector2(node.position.x - hit.x, node.position.z - hit.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	if best < 0:
+		return
+	if card_mode == "" or card_mode == "swap":
+		arena.select_piece(pieces[best]["node"])
+	_on_piece_pressed(best)
+
 
 func _camera_action(action: String) -> void:
 	match action:
@@ -788,21 +1257,37 @@ func _camera_action(action: String) -> void:
 		"right":
 			cam_yaw += deg_to_rad(18.0)
 		"in":
-			cam_dist = clampf(cam_dist * 0.88, 850.0, 3200.0)
+			cam_dist = clampf(cam_dist * 0.88, 900.0, 4600.0)
 		"out":
-			cam_dist = clampf(cam_dist * 1.14, 850.0, 3200.0)
+			cam_dist = clampf(cam_dist * 1.14, 900.0, 4600.0)
 		_:
 			_reset_view()
 	_update_camera()
 
 
+func _shake(duration := 0.26, amp := 12.0) -> void:
+	if camera == null:
+		return
+	var tw := create_tween()
+	var steps := 5
+	var seg := duration / float(steps)
+	for i in steps:
+		var a := amp * (1.0 - float(i) / float(steps))
+		tw.tween_property(camera, "v_offset", randf_range(-a, a), seg)
+		tw.parallel().tween_property(camera, "h_offset", randf_range(-a, a), seg)
+	tw.tween_property(camera, "v_offset", 0.0, 0.08)
+	tw.parallel().tween_property(camera, "h_offset", 0.0, 0.08)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			cam_dist = clampf(cam_dist * 0.92, 850.0, 3200.0)
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_try_world_pick(event.position)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			cam_dist = clampf(cam_dist * 0.92, 900.0, 4600.0)
 			_update_camera()
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			cam_dist = clampf(cam_dist * 1.08, 850.0, 3200.0)
+			cam_dist = clampf(cam_dist * 1.08, 900.0, 4600.0)
 			_update_camera()
 		elif event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
 			dragging = event.pressed
@@ -810,6 +1295,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		cam_yaw -= event.relative.x * 0.007
 		cam_pitch = clampf(cam_pitch + event.relative.y * 0.005, deg_to_rad(16.0), deg_to_rad(86.0))
 		_update_camera()
+	elif event is InputEventScreenTouch and event.pressed:
+		_try_world_pick(event.position)
 	elif event is InputEventScreenDrag:
 		cam_yaw -= event.relative.x * 0.009
 		cam_pitch = clampf(cam_pitch + event.relative.y * 0.007, deg_to_rad(16.0), deg_to_rad(86.0))
@@ -819,13 +1306,18 @@ func _unhandled_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------- 自动 / 截图
 
 func _auto_play() -> void:
-	for _i in 40:
-		await get_tree().create_timer(0.1).timeout
+	for _i in 160:
+		await get_tree().create_timer(0.08).timeout
 		if game_over:
 			break
 		if busy or awaiting_pick:
-			await get_tree().create_timer(0.3).timeout
+			await get_tree().create_timer(0.25).timeout
 			continue
+		var team := current_team
+		if ai_level >= 1:
+			await _ai_cards()
+			if game_over or busy or current_team != team:
+				continue
 		await _do_roll()
 
 
@@ -844,9 +1336,20 @@ func _setup_showcase() -> void:
 			if cell >= 0:
 				p["cell"] = cell
 				p["node"].position = _pt_pos(_path_point(t, cell))
-	cards[0] = ["boost", "shield"]
+	cards[0] = ["boost", "shield", "teleport", "snipe"]
 	captures = [2, 1, 0, 3]
 	rolls = [8, 8, 7, 9]
+	# 摆出"轮到红队、可走棋子高亮"的状态
+	var nodes: Array = []
+	var dests: Array = []
+	for i in 4:
+		var p: Dictionary = pieces[i]
+		if p["cell"] >= 0:
+			nodes.append(p["node"])
+			dests.append(_pt_pos(_path_point(0, int(p["cell"]) + 4)))
+	arena.show_movable(nodes, TEAM_COLORS[0])
+	arena.mark_tiles(dests, TEAM_COLORS[0])
+	arena.select_piece(pieces[0]["node"])
 	_update_all()
 
 

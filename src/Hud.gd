@@ -1,25 +1,37 @@
 class_name Hud
 extends CanvasLayer
-## 重制版 HUD：毛玻璃面板 / 队伍状态条 / 卡片槽 / 3D 骰子读数 / 开始与结算界面
+## 重制版 HUD：毛玻璃面板 / 回合横幅 / 队伍状态 / 道具卡槽 / 事件弹窗 / 开始与结算
 
 signal roll_pressed
 signal restart_pressed
 signal camera_pressed(action: String)
 signal card_pressed(index: int)
 signal piece_pressed(index: int)
-signal start_pressed(mode: int, level: int)
+signal start_pressed(mode: int, level: int, theme_id: String)
+signal theme_previewed(theme_id: String)
 
 const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
 const DIM := Color("98a3b8")
 
+const ITEM_INFO := {
+	"boost": ["加速", "+2 点数", Color("ff9a3c")],
+	"shield": ["护盾", "免疫一次", Color("6cc6ff")],
+	"warp": ["跃迁", "前进 3 格", Color("b484ff")],
+	"snipe": ["狙击", "击退对手", Color("ff5566")],
+	"swap": ["换位", "与对手换位", Color("ffd166")],
+	"freeze": ["冰冻", "对手停一轮", Color("7fe6ff")],
+	"double": ["双倍", "点数 ×2", Color("ffe066")],
+	"teleport": ["传送", "前进 5 格", Color("7cf0a8")],
+}
+
 var _root: Control
-var _title_panel: PanelContainer
 var _turn_label: Label
-var _dice_pill: PanelContainer
 var _dice_value: Label
 var _log_label: Label
 var _roll_button: Button
+var _banner: PanelContainer
+var _banner_label: Label
 var _pick_panel: PanelContainer
 var _pick_box: HBoxContainer
 var _pick_hint: Label
@@ -30,11 +42,19 @@ var _start_overlay: Control
 var _win_overlay: Control
 var _win_title: Label
 var _win_stats: Label
+var _event_overlay: Control
+var _event_card: PanelContainer
+var _event_title: Label
+var _event_desc: Label
 var _mode := 0
 var _level := 1
+var _theme_id := "dusk"
 var _mode_buttons: Array = []
 var _level_buttons: Array = []
+var _theme_buttons: Array = []
 var _safe := Vector4.ZERO
+var _event_tween: Tween
+var _game_nodes: Array = []
 
 
 func _ready() -> void:
@@ -46,21 +66,14 @@ func _ready() -> void:
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_root)
 
-	var theme := Theme.new()
-	var font := SystemFont.new()
-	font.font_names = PackedStringArray([
-		"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC", "Sans-Serif",
-	])
-	theme.default_font = font
-	theme.default_font_size = 17
-	_root.theme = theme
-
 	_build_vignette()
 	_build_title()
 	_build_team_bar()
+	_build_banner()
 	_build_log()
 	_build_bottom()
 	_build_pick()
+	_build_event()
 	_build_start()
 	_build_win()
 
@@ -171,17 +184,17 @@ func _btn_style(bg: Color, border: Color) -> StyleBoxFlat:
 # ---------------------------------------------------------------- 构建
 
 func _build_title() -> void:
-	_title_panel = PanelContainer.new()
-	_title_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.78), 18))
-	_title_panel.position = Vector2(24.0 + _safe.x, 20.0 + _safe.y)
-	_root.add_child(_title_panel)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.78), 18))
+	panel.position = Vector2(24.0 + _safe.x, 20.0 + _safe.y)
+	_root.add_child(panel)
+	_game_nodes.append(panel)
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 2)
-	_title_panel.add_child(vb)
+	panel.add_child(vb)
 
-	var title := _label("骑士飞行棋", 26, GOLD)
-	vb.add_child(title)
+	vb.add_child(_label("骑士飞行棋", 26, GOLD))
 	vb.add_child(_label("KNIGHT'S GAMBIT · 2026", 10, Color(1, 1, 1, 0.4)))
 
 	var space := Control.new()
@@ -191,12 +204,12 @@ func _build_title() -> void:
 	_turn_label = _label("准备开始", 19, TEXT)
 	vb.add_child(_turn_label)
 
-	_dice_pill = PanelContainer.new()
-	_dice_pill.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.05), 10, Color(1, 1, 1, 0.06)))
-	_dice_pill.custom_minimum_size = Vector2(0, 34)
-	vb.add_child(_dice_pill)
+	var pill := PanelContainer.new()
+	pill.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.05), 10, Color(1, 1, 1, 0.06)))
+	pill.custom_minimum_size = Vector2(0, 34)
+	vb.add_child(pill)
 	_dice_value = _label("点数  —", 16, Color(1, 1, 1, 0.75))
-	_dice_pill.add_child(_dice_value)
+	pill.add_child(_dice_value)
 
 	var restart := _btn("重新开始", Vector2(0, 32), 13)
 	restart.pressed.connect(func(): restart_pressed.emit())
@@ -212,6 +225,7 @@ func _build_team_bar() -> void:
 	holder.alignment = BoxContainer.ALIGNMENT_CENTER
 	holder.add_theme_constant_override("separation", 10)
 	_root.add_child(holder)
+	_game_nodes.append(holder)
 
 	for t in 4:
 		var chip := PanelContainer.new()
@@ -228,6 +242,23 @@ func _build_team_bar() -> void:
 		_team_chips.append({"panel": chip, "name": name_l, "info": info_l})
 
 
+func _build_banner() -> void:
+	_banner = PanelContainer.new()
+	_banner.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_banner.offset_left = -170.0
+	_banner.offset_right = 170.0
+	_banner.offset_top = 96.0 + _safe.y
+	_banner.offset_bottom = 146.0 + _safe.y
+	_banner.add_theme_stylebox_override("panel", _flat(Color(0.05, 0.06, 0.09, 0.9), 18, GOLD, 2))
+	_root.add_child(_banner)
+	_game_nodes.append(_banner)
+
+	_banner_label = _label("准备开始", 24, GOLD)
+	_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_banner.add_child(_banner_label)
+
+
 func _build_log() -> void:
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.7), 16))
@@ -239,6 +270,7 @@ func _build_log() -> void:
 	panel.offset_bottom = 176.0 + _safe.y
 	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_root.add_child(panel)
+	_game_nodes.append(panel)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 4)
 	panel.add_child(vb)
@@ -256,8 +288,9 @@ func _build_bottom() -> void:
 	bar.offset_top = -104.0 - _safe.w
 	bar.offset_bottom = -20.0 - _safe.w
 	bar.alignment = BoxContainer.ALIGNMENT_CENTER
-	bar.add_theme_constant_override("separation", 18)
+	bar.add_theme_constant_override("separation", 16)
 	_root.add_child(bar)
+	_game_nodes.append(bar)
 
 	# 相机
 	var cam_row := HBoxContainer.new()
@@ -265,7 +298,7 @@ func _build_bottom() -> void:
 	cam_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	bar.add_child(cam_row)
 	for spec in [["◀", "left"], ["▶", "right"], ["＋", "in"], ["－", "out"], ["⌂", "top"]]:
-		var b := _btn(spec[0], Vector2(44, 44), 18)
+		var b := _btn(spec[0], Vector2(42, 44), 18)
 		b.add_theme_stylebox_override("normal", _btn_style(Color(0.06, 0.08, 0.12, 0.9), Color(1, 1, 1, 0.28)))
 		b.add_theme_stylebox_override("hover", _btn_style(Color(0.12, 0.15, 0.22, 0.95), GOLD))
 		b.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0, 0.95))
@@ -273,22 +306,16 @@ func _build_bottom() -> void:
 		b.pressed.connect(func(): camera_pressed.emit(act))
 		cam_row.add_child(b)
 
-	# 掷骰
-	var dice_col := VBoxContainer.new()
-	dice_col.add_theme_constant_override("separation", 6)
-	dice_col.alignment = BoxContainer.ALIGNMENT_CENTER
-	bar.add_child(dice_col)
-
 	_roll_button = Button.new()
 	_roll_button.text = "掷 骰 子"
-	_roll_button.custom_minimum_size = Vector2(236, 62)
-	_roll_button.add_theme_font_size_override("font_size", 25)
+	_roll_button.custom_minimum_size = Vector2(214, 66)
+	_roll_button.add_theme_font_size_override("font_size", 26)
 	_roll_button.focus_mode = Control.FOCUS_NONE
 	_roll_button.pressed.connect(func(): roll_pressed.emit())
-	dice_col.add_child(_roll_button)
+	bar.add_child(_roll_button)
 	_set_roll_style(Color("d9473c"))
 
-	# 卡片
+	# 道具卡
 	var card_panel := PanelContainer.new()
 	card_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.7), 16))
 	bar.add_child(card_panel)
@@ -297,11 +324,11 @@ func _build_bottom() -> void:
 	card_panel.add_child(cvb)
 	cvb.add_child(_label("道具卡", 11, Color(1, 1, 1, 0.45)))
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", 7)
 	cvb.add_child(row)
-	for i in 2:
+	for i in 4:
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(96, 58)
+		b.custom_minimum_size = Vector2(88, 56)
 		b.focus_mode = Control.FOCUS_NONE
 		b.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.09)))
 		b.add_theme_stylebox_override("hover", _btn_style(Color(1, 1, 1, 0.14), GOLD))
@@ -310,18 +337,19 @@ func _build_bottom() -> void:
 		b.add_theme_color_override("font_color", TEXT)
 		b.add_theme_color_override("font_hover_color", Color.WHITE)
 		b.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.25))
-		b.pressed.connect(func(): card_pressed.emit(i))
+		var idx := i
+		b.pressed.connect(func(): card_pressed.emit(idx))
 		row.add_child(b)
 		var vb := VBoxContainer.new()
 		vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		vb.alignment = BoxContainer.ALIGNMENT_CENTER
 		vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		b.add_child(vb)
-		var t1 := _label("—", 15, Color(1, 1, 1, 0.3))
+		var t1 := _label("—", 14, Color(1, 1, 1, 0.3))
 		t1.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		t1.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vb.add_child(t1)
-		var t2 := _label("", 11, Color(1, 1, 1, 0.45))
+		var t2 := _label("", 10, Color(1, 1, 1, 0.45))
 		t2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		t2.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vb.add_child(t2)
@@ -332,27 +360,55 @@ func _build_bottom() -> void:
 func _build_pick() -> void:
 	var holder := CenterContainer.new()
 	holder.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	holder.offset_top = -196.0 - _safe.w
-	holder.offset_bottom = -120.0 - _safe.w
+	holder.offset_top = -200.0 - _safe.w
+	holder.offset_bottom = -118.0 - _safe.w
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(holder)
 
 	_pick_panel = PanelContainer.new()
-	_pick_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.85), 16, Color(1, 1, 1, 0.1)))
+	_pick_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.88), 16, Color(1, 1, 1, 0.1)))
 	_pick_panel.visible = false
 	holder.add_child(_pick_panel)
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 6)
 	_pick_panel.add_child(vb)
-	var hint := _label("选择一枚棋子", 12, Color(1, 1, 1, 0.5))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_pick_hint = hint
-	vb.add_child(hint)
+	_pick_hint = _label("选择一枚棋子", 12, Color(1, 1, 1, 0.5))
+	_pick_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_pick_hint)
 	_pick_box = HBoxContainer.new()
 	_pick_box.add_theme_constant_override("separation", 8)
 	_pick_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_child(_pick_box)
+
+
+func _build_event() -> void:
+	_event_overlay = Control.new()
+	_event_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_event_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_event_overlay.visible = false
+	_root.add_child(_event_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_event_overlay.add_child(center)
+
+	_event_card = PanelContainer.new()
+	_event_card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.96), 22, GOLD, 2))
+	_event_card.custom_minimum_size = Vector2(520, 0)
+	center.add_child(_event_card)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	_event_card.add_child(vb)
+	_event_title = _label("随机事件", 30, GOLD)
+	_event_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_event_title)
+	_event_desc = _label("", 17, Color(0.9, 0.94, 1.0, 0.9))
+	_event_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_event_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vb.add_child(_event_desc)
 
 
 func _build_start() -> void:
@@ -373,45 +429,62 @@ func _build_start() -> void:
 
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.96), 24, Color(1, 1, 1, 0.1)))
-	card.custom_minimum_size = Vector2(560, 0)
+	card.custom_minimum_size = Vector2(640, 0)
 	center.add_child(card)
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 10)
+	vb.add_theme_constant_override("separation", 8)
 	card.add_child(vb)
 
-	var t := _label("骑士飞行棋 3", 40, GOLD)
+	var t := _label("骑士飞行棋 3", 38, GOLD)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(t)
 	var sub := _label("KNIGHT'S GAMBIT · 2026 REMAKE", 11, Color(1, 1, 1, 0.45))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
-	vb.add_child(_spacer(12))
+	vb.add_child(_spacer(8))
+
 	vb.add_child(_label("对战模式", 13, DIM))
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 10)
 	vb.add_child(mode_row)
 	for i in 2:
-		var txt := "人机 · 1v3" if i == 0 else "4 人热座"
-		var b := _btn(txt, Vector2(0, 48), 17)
+		var txt: String = ["人机 · 1v3", "4 人热座"][i]
+		var b := _btn(txt, Vector2(0, 46), 17)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var idx := i
 		b.pressed.connect(func(): _select_mode(idx))
 		mode_row.add_child(b)
 		_mode_buttons.append(b)
+
 	vb.add_child(_label("AI 难度", 13, DIM))
 	var level_row := HBoxContainer.new()
 	level_row.add_theme_constant_override("separation", 10)
 	vb.add_child(level_row)
 	for i in 3:
 		var txt2: String = ["简单", "普通", "困难"][i]
-		var b2 := _btn(txt2, Vector2(0, 46), 16)
+		var b2 := _btn(txt2, Vector2(0, 44), 16)
 		b2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var idx2 := i
 		b2.pressed.connect(func(): _select_level(idx2))
 		level_row.add_child(b2)
 		_level_buttons.append(b2)
-	vb.add_child(_spacer(12))
+
+	vb.add_child(_label("棋盘主题", 13, DIM))
+	var theme_row := HBoxContainer.new()
+	theme_row.add_theme_constant_override("separation", 10)
+	vb.add_child(theme_row)
+	var ids := ["dusk", "frost", "ember"]
+	for i in 3:
+		var txt3: String = ["暮色竞技场", "霜封荒原", "熔火深渊"][i]
+		var b3 := _btn(txt3, Vector2(0, 44), 15)
+		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var tid: String = ids[i]
+		b3.pressed.connect(func(): _select_theme(tid))
+		theme_row.add_child(b3)
+		_theme_buttons.append(b3)
+
+	vb.add_child(_spacer(10))
 	var go := _btn("开 始 对 局", Vector2(0, 58), 24)
 	go.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a")))
 	go.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0")))
@@ -419,12 +492,16 @@ func _build_start() -> void:
 	go.add_theme_color_override("font_color", Color("1a1206"))
 	go.pressed.connect(func(): _start_clicked())
 	vb.add_child(go)
-	var hint := _label("拖动旋转视角 · 滚轮 / 双指缩放", 11, Color(1, 1, 1, 0.35))
+	var hint := _label("8 种道具 · 7 种随机事件 · 宝箱格触发 · 掷 6 出基地", 12, Color(1, 1, 1, 0.45))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint)
+	var hint2 := _label("拖动旋转视角 · 双指 / 滚轮缩放 · 点棋子或按钮走子", 11, Color(1, 1, 1, 0.3))
+	hint2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hint2)
 
 	_select_mode(0)
 	_select_level(1)
+	_select_theme("dusk")
 
 
 func _build_win() -> void:
@@ -445,7 +522,7 @@ func _build_win() -> void:
 
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.97), 24, Color(1, 1, 1, 0.1)))
-	card.custom_minimum_size = Vector2(460, 0)
+	card.custom_minimum_size = Vector2(480, 0)
 	center.add_child(card)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)
@@ -473,22 +550,26 @@ func _spacer(h: int) -> Control:
 
 func _select_mode(i: int) -> void:
 	_mode = i
-	for k in _mode_buttons.size():
-		var b: Button = _mode_buttons[k]
-		if k == i:
-			b.add_theme_stylebox_override("normal", _btn_style(Color(0.55, 0.42, 0.22, 0.55), GOLD))
-			b.add_theme_color_override("font_color", Color("ffe6b8"))
-		else:
-			b.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1)))
-			b.add_theme_color_override("font_color", TEXT)
+	_paint_choice(_mode_buttons, i)
 
 
 func _select_level(i: int) -> void:
 	_level = i
-	for k in _level_buttons.size():
-		var b: Button = _level_buttons[k]
-		if k == i:
-			b.add_theme_stylebox_override("normal", _btn_style(Color(0.55, 0.42, 0.22, 0.55), GOLD))
+	_paint_choice(_level_buttons, i)
+
+
+func _select_theme(id: String) -> void:
+	_theme_id = id
+	var ids := ["dusk", "frost", "ember"]
+	_paint_choice(_theme_buttons, ids.find(id))
+	theme_previewed.emit(id)
+
+
+func _paint_choice(buttons: Array, active: int) -> void:
+	for k in buttons.size():
+		var b: Button = buttons[k]
+		if k == active:
+			b.add_theme_stylebox_override("normal", _btn_style(Color(0.55, 0.42, 0.22, 0.6), GOLD))
 			b.add_theme_color_override("font_color", Color("ffe6b8"))
 		else:
 			b.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1)))
@@ -497,23 +578,32 @@ func _select_level(i: int) -> void:
 
 func _start_clicked() -> void:
 	hide_start()
-	start_pressed.emit(_mode, _level)
+	start_pressed.emit(_mode, _level, _theme_id)
 
 
 # ---------------------------------------------------------------- 对外接口
 
 func show_start() -> void:
 	_start_overlay.visible = true
+	for n in _game_nodes:
+		if is_instance_valid(n):
+			n.visible = false
 	hide_win()
 
 
 func hide_start() -> void:
 	_start_overlay.visible = false
+	for n in _game_nodes:
+		if is_instance_valid(n):
+			n.visible = true
 
 
 func set_turn(text: String, color: Color) -> void:
 	_turn_label.text = text
 	_turn_label.add_theme_color_override("font_color", color)
+	_banner_label.text = text
+	_banner_label.add_theme_color_override("font_color", color.lightened(0.45))
+	_banner.add_theme_stylebox_override("panel", _flat(Color(color.darkened(0.62).r, color.darkened(0.62).g, color.darkened(0.62).b, 0.92), 18, color.lightened(0.25), 2))
 	_set_roll_style(color)
 
 
@@ -552,13 +642,13 @@ func set_teams(status: Array) -> void:
 		var chip: Dictionary = _team_chips[t]
 		var s: Dictionary = status[t]
 		var name_l: Label = chip["name"]
-		name_l.text = s["name"] + ("  AI" if s["ai"] else "  你")
+		name_l.text = ("▶ " if s["current"] else "") + s["name"] + ("  AI" if s["ai"] else "  你")
 		name_l.add_theme_color_override("font_color", s["color"])
 		var info: Label = chip["info"]
 		info.text = "%d/4 · 吃%d · 卡%d" % [s["finished"], s["captures"], s["cards"]]
 		var panel: PanelContainer = chip["panel"]
 		if s["current"]:
-			panel.add_theme_stylebox_override("panel", _flat(Color(0.09, 0.11, 0.16, 0.92), 14, s["color"], 2))
+			panel.add_theme_stylebox_override("panel", _flat(Color(0.10, 0.12, 0.18, 0.94), 14, s["color"], 3))
 		else:
 			panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.66), 14))
 
@@ -574,21 +664,22 @@ func log(text: String) -> void:
 
 
 func set_cards(cards: Array, enabled: bool) -> void:
-	var names := {"boost": ["加速", "+2 点数"], "shield": ["护盾", "免疫一次"], "warp": ["跃迁", "前进 3 格"]}
 	for i in _card_buttons.size():
 		var b: Button = _card_buttons[i]
 		var labels: Array = _card_labels[i]
 		if i < cards.size():
 			var id: String = cards[i]
-			var info: Array = names.get(id, ["?", ""])
+			var info: Array = ITEM_INFO.get(id, ["?", "", TEXT])
 			labels[0].text = info[0]
 			labels[1].text = info[1]
-			labels[0].add_theme_color_override("font_color", GOLD)
+			labels[0].add_theme_color_override("font_color", info[2])
+			b.add_theme_stylebox_override("normal", _btn_style(Color(info[2].r * 0.18, info[2].g * 0.18, info[2].b * 0.18, 0.9), info[2].darkened(0.2)))
 			b.disabled = not enabled
 		else:
 			labels[0].text = "空"
 			labels[1].text = ""
 			labels[0].add_theme_color_override("font_color", Color(1, 1, 1, 0.25))
+			b.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.07)))
 			b.disabled = true
 
 
@@ -610,6 +701,22 @@ func show_pick(options: Array, hint := "选择一枚棋子") -> void:
 
 func hide_pick() -> void:
 	_pick_panel.visible = false
+
+
+func show_event(title: String, desc: String, color: Color) -> void:
+	_event_title.text = title
+	_event_title.add_theme_color_override("font_color", color)
+	_event_desc.text = desc
+	_event_card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.96), 22, color, 3))
+	_event_overlay.visible = true
+	_event_overlay.modulate.a = 0.0
+	if _event_tween and _event_tween.is_valid():
+		_event_tween.kill()
+	_event_tween = create_tween()
+	_event_tween.tween_property(_event_overlay, "modulate:a", 1.0, 0.16)
+	_event_tween.tween_interval(1.9)
+	_event_tween.tween_property(_event_overlay, "modulate:a", 0.0, 0.24)
+	_event_tween.tween_callback(func(): _event_overlay.visible = false)
 
 
 func show_win(title: String, color: Color, stats: String) -> void:
