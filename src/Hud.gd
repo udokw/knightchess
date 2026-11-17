@@ -13,6 +13,8 @@ signal start_pressed(mode: int, level: int, theme_id: String, cells: int, styles
 signal theme_previewed(theme_id: String)
 signal theme_selected(theme_id: String)
 signal sound_toggled(on: bool)
+signal music_toggled(on: bool)
+signal prefs_changed
 signal roulette_done(index: int)
 signal roulette_tick
 
@@ -47,6 +49,7 @@ const ITEM_INFO := {
 const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵"]
 const BOARD_SIZES := [40, 52, 64]
 const BOARD_SIZE_NAMES := ["标准 · 40 格", "大型 · 52 格", "巨型 · 64 格"]
+const TEAMS_ROW_H := 60.0
 
 var _root: Control
 var _log_panel: PanelContainer
@@ -58,13 +61,29 @@ var _menu_ring: Panel
 var _menu_open := false
 var _sound_on := true
 var _sound_button: Button
+var _music_on := true
+var _music_button: Button
+var _applying_prefs := false
 var _theme_row: GridContainer
 var _theme_btns: Array = []
 var _team_chips: Array = []
+var _teams_slide: Control
+var _teams_open := false
+var _teams_tween: Tween
+var _teams_open_y := 34.0
+var _turn_bar: PanelContainer
+var _turn_bar_label: Label
+var _turn_bar_ms := 0
 var _card_buttons: Array = []
 var _card_labels: Array = []
 var _card_ids: Array = ["", "", "", ""]
 var _card_bar: Control
+var _items_panel: PanelContainer
+var _items_handle: Button
+var _items_tween: Tween
+var _items_open := true
+var _items_w := 356.0
+var _items_edge := -34.0
 var _pick_panel: PanelContainer
 var _pick_box: VBoxContainer
 var _pick_hint: Label
@@ -329,6 +348,10 @@ func _build_menu() -> void:
 	_sound_button.pressed.connect(_toggle_sound)
 	vb.add_child(_sound_button)
 
+	_music_button = _btn("主题音乐：开", Vector2(0, 36), 14)
+	_music_button.pressed.connect(_toggle_music)
+	vb.add_child(_music_button)
+
 	_pick_toggle = _btn("走子列表：开", Vector2(0, 36), 14)
 	_pick_toggle.pressed.connect(_toggle_pick_visible)
 	vb.add_child(_pick_toggle)
@@ -360,6 +383,16 @@ func _toggle_sound() -> void:
 	_sound_on = not _sound_on
 	_sound_button.text = "音效：开" if _sound_on else "音效：关"
 	sound_toggled.emit(_sound_on)
+	if not _applying_prefs:
+		prefs_changed.emit()
+
+
+func _toggle_music() -> void:
+	_music_on = not _music_on
+	_music_button.text = "主题音乐：开" if _music_on else "主题音乐：关"
+	music_toggled.emit(_music_on)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _toggle_pick_visible() -> void:
@@ -369,12 +402,16 @@ func _toggle_pick_visible() -> void:
 		_pick_panel.visible = false
 	elif not _last_options.is_empty():
 		_pick_panel.visible = true
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _pick_theme(id: String) -> void:
 	_theme_id = id
 	_paint_theme_btns()
 	theme_selected.emit(id)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _paint_theme_btns() -> void:
@@ -388,19 +425,43 @@ func _paint_theme_btns() -> void:
 			b.add_theme_color_override("font_color", TEXT)
 
 
-# ---------------------------------------------------------------- 顶部队伍
+# ---------------------------------------------------------------- 顶部记分牌
 
+## 记分牌默认向上贴边收起，只露出「当前回合」细条；点细条展开 / 收起
 func _build_teams() -> void:
+	_teams_open_y = 34.0 + _safe.y
+
+	_turn_bar = PanelContainer.new()
+	_turn_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_turn_bar.offset_left = -96.0
+	_turn_bar.offset_right = 96.0
+	_turn_bar.offset_top = 0.0 + _safe.y
+	_turn_bar.offset_bottom = 28.0 + _safe.y
+	_turn_bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	_turn_bar.gui_input.connect(_on_turn_bar_input)
+	_root.add_child(_turn_bar)
+	_game_nodes.append(_turn_bar)
+
+	_turn_bar_label = _label("准备开始  ▾", 13, GOLD)
+	_turn_bar_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_turn_bar_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_turn_bar.add_child(_turn_bar_label)
+
+	_teams_slide = Control.new()
+	_teams_slide.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_teams_slide.offset_left = -280.0
+	_teams_slide.offset_right = 280.0
+	_teams_slide.offset_top = _teams_open_y
+	_teams_slide.offset_bottom = _teams_open_y + TEAMS_ROW_H
+	_teams_slide.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(_teams_slide)
+	_game_nodes.append(_teams_slide)
+
 	var holder := HBoxContainer.new()
-	holder.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	holder.offset_left = -280.0
-	holder.offset_right = 280.0
-	holder.offset_top = 18.0 + _safe.y
-	holder.offset_bottom = 78.0 + _safe.y
+	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	holder.alignment = BoxContainer.ALIGNMENT_CENTER
 	holder.add_theme_constant_override("separation", 8)
-	_root.add_child(holder)
-	_game_nodes.append(holder)
+	_teams_slide.add_child(holder)
 
 	for t in 4:
 		var chip := PanelContainer.new()
@@ -415,6 +476,68 @@ func _build_teams() -> void:
 		var info_l := _label("0/4", 11, DIM)
 		vb.add_child(info_l)
 		_team_chips.append({"panel": chip, "name": name_l, "info": info_l})
+
+	_set_teams_open(false, false)
+	_paint_turn_bar()
+
+
+func _set_teams_open(open: bool, animate := true) -> void:
+	_teams_open = open
+	_paint_turn_bar()
+	if _teams_slide == null:
+		return
+	var target_y := _teams_open_y if open else -TEAMS_ROW_H - 4.0
+	if _teams_tween and _teams_tween.is_valid():
+		_teams_tween.kill()
+	if not animate:
+		_teams_slide.offset_top = target_y
+		_teams_slide.offset_bottom = target_y + TEAMS_ROW_H
+		return
+	_teams_tween = create_tween()
+	_teams_tween.set_parallel(true)
+	_teams_tween.tween_property(_teams_slide, "offset_top", target_y, 0.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_teams_tween.tween_property(_teams_slide, "offset_bottom", target_y + TEAMS_ROW_H, 0.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+
+func _on_turn_bar_input(event: InputEvent) -> void:
+	var pressed := false
+	if event is InputEventScreenTouch:
+		pressed = (event as InputEventScreenTouch).pressed
+	elif event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		pressed = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	if not pressed:
+		return
+	# 触摸与鼠标模拟事件可能重复触发，做一次节流
+	var now := Time.get_ticks_msec()
+	if now - _turn_bar_ms < 250:
+		return
+	_turn_bar_ms = now
+	_set_teams_open(not _teams_open)
+
+
+func _paint_turn_bar() -> void:
+	if _turn_bar == null or _turn_bar_label == null:
+		return
+	var arrow := "▴" if _teams_open else "▾"
+	_turn_bar_label.text = "%s  %s" % [_turn_short, arrow]
+	_turn_bar_label.add_theme_color_override("font_color", _turn_color)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.035, 0.05, 0.085, 0.88)
+	s.corner_radius_top_left = 0
+	s.corner_radius_top_right = 0
+	s.corner_radius_bottom_left = 12
+	s.corner_radius_bottom_right = 12
+	s.border_width_left = 1
+	s.border_width_top = 0
+	s.border_width_right = 1
+	s.border_width_bottom = 1
+	s.border_color = Color(_turn_color.r, _turn_color.g, _turn_color.b, 0.45)
+	s.content_margin_left = 12
+	s.content_margin_right = 12
+	s.content_margin_top = 2
+	s.content_margin_bottom = 2
+	_turn_bar.add_theme_stylebox_override("panel", s)
 
 
 # ---------------------------------------------------------------- 右上角战报
@@ -456,29 +579,44 @@ func _toggle_log() -> void:
 	_log_button.text = "战 报 ▴" if _log_panel.visible else "战 报 ▾"
 
 
-# ---------------------------------------------------------------- 右下角道具
+# ---------------------------------------------------------------- 右下角道具抽屉
 
+## 道具栏做成贴右边缘的抽屉：默认展开，点把手向右收起，再点滑出
 func _build_cards() -> void:
+	_items_panel = PanelContainer.new()
+	_items_panel.anchor_left = 1.0
+	_items_panel.anchor_top = 1.0
+	_items_panel.anchor_right = 1.0
+	_items_panel.anchor_bottom = 1.0
+	_items_panel.offset_left = _items_edge - _items_w - _safe.z
+	_items_panel.offset_right = _items_edge - _safe.z
+	_items_panel.offset_top = -108.0 - _safe.w
+	_items_panel.offset_bottom = -16.0 - _safe.w
+	# 只圆左侧两角：右侧贴着屏幕边缘，像从边上推出来的抽屉
+	var ps := _flat(Color(0.035, 0.05, 0.085, 0.9), 18, Color(1, 1, 1, 0.1), 1)
+	ps.corner_radius_top_right = 4
+	ps.corner_radius_bottom_right = 4
+	ps.content_margin_left = 12
+	ps.content_margin_right = 12
+	ps.content_margin_top = 7
+	ps.content_margin_bottom = 7
+	_items_panel.add_theme_stylebox_override("panel", ps)
+	_root.add_child(_items_panel)
+	_game_nodes.append(_items_panel)
+
 	_card_bar = VBoxContainer.new()
-	_card_bar.anchor_left = 1.0
-	_card_bar.anchor_top = 1.0
-	_card_bar.anchor_right = 1.0
-	_card_bar.anchor_bottom = 1.0
-	_card_bar.offset_left = -360.0 - _safe.z
-	_card_bar.offset_right = -20.0 - _safe.z
-	_card_bar.offset_top = -96.0 - _safe.w
-	_card_bar.offset_bottom = -18.0 - _safe.w
-	_card_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_card_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_card_bar.alignment = BoxContainer.ALIGNMENT_END
-	_root.add_child(_card_bar)
-	_game_nodes.append(_card_bar)
+	_card_bar.add_theme_constant_override("separation", 4)
+	_card_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	_items_panel.add_child(_card_bar)
 
 	var head := HBoxContainer.new()
-	head.alignment = BoxContainer.ALIGNMENT_END
+	head.add_theme_constant_override("separation", 6)
 	_card_bar.add_child(head)
-	var cap := _label("道 具", 10, Color(1, 1, 1, 0.4))
+	var cap := _label("道 具", 11, Color(1, 1, 1, 0.5))
+	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(cap)
+	var tip := _label("点卡使用", 10, Color(1, 1, 1, 0.3))
+	head.add_child(tip)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -514,6 +652,74 @@ func _build_cards() -> void:
 		vb.add_child(t2)
 		_card_buttons.append(b)
 		_card_labels.append([t1, t2])
+
+	# 抽屉把手：始终贴在右边缘，在抽屉之上
+	_items_handle = Button.new()
+	_items_handle.anchor_left = 1.0
+	_items_handle.anchor_right = 1.0
+	_items_handle.anchor_top = 0.5
+	_items_handle.anchor_bottom = 0.5
+	_items_handle.offset_left = -30.0 - _safe.z
+	_items_handle.offset_right = -5.0 - _safe.z
+	_items_handle.offset_top = -56.0
+	_items_handle.offset_bottom = 56.0
+	_items_handle.focus_mode = Control.FOCUS_NONE
+	_items_handle.add_theme_font_size_override("font_size", 12)
+	var hs := _btn_style(Color(0.05, 0.072, 0.115, 0.92), Color(GOLD.r, GOLD.g, GOLD.b, 0.55), 9)
+	hs.corner_radius_top_right = 0
+	hs.corner_radius_bottom_right = 0
+	hs.content_margin_left = 2
+	hs.content_margin_right = 2
+	_items_handle.add_theme_stylebox_override("normal", hs)
+	_items_handle.add_theme_stylebox_override("hover", _btn_style(Color(0.1, 0.085, 0.05, 0.95), GOLD, 9))
+	_items_handle.add_theme_stylebox_override("pressed", _btn_style(Color(0.14, 0.11, 0.06, 0.98), GOLD, 9))
+	_items_handle.add_theme_color_override("font_color", Color("ffe6b8"))
+	_items_handle.pressed.connect(_toggle_items)
+	_root.add_child(_items_handle)
+	_game_nodes.append(_items_handle)
+
+	_apply_items_position(false)
+
+
+func _items_open_offset() -> Vector2:
+	return Vector2(_items_edge - _items_w - _safe.z, _items_edge - _safe.z)
+
+
+func _apply_items_position(animate: bool) -> void:
+	if _items_panel == null:
+		return
+	var o := _items_open_offset()
+	var target_left := o.x
+	var target_right := o.y
+	if not _items_open:
+		# 收起：整体推到屏幕右侧外面，只在右边留一个把手
+		target_left = 10.0 - _safe.z
+		target_right = 10.0 - _safe.z + _items_w
+	if _items_tween and _items_tween.is_valid():
+		_items_tween.kill()
+	if animate:
+		_items_tween = create_tween()
+		_items_tween.set_parallel(true)
+		_items_tween.tween_property(_items_panel, "offset_left", target_left, 0.26) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_items_tween.tween_property(_items_panel, "offset_right", target_right, 0.26) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	else:
+		_items_panel.offset_left = target_left
+		_items_panel.offset_right = target_right
+	if _items_handle:
+		_items_handle.text = ("▶" if _items_open else "◀") + "\n道\n具"
+
+
+func _toggle_items() -> void:
+	set_items_open(not _items_open)
+
+
+func set_items_open(open: bool, animate := true) -> void:
+	_items_open = open
+	_apply_items_position(animate)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 # ---------------------------------------------------------------- 选择面板
@@ -952,11 +1158,15 @@ func _build_win() -> void:
 func _select_mode(i: int) -> void:
 	_mode = i
 	_paint_choice(_mode_buttons, i)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _select_level(i: int) -> void:
 	_level = i
 	_paint_choice(_level_buttons, i)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _select_theme(id: String) -> void:
@@ -964,11 +1174,15 @@ func _select_theme(id: String) -> void:
 	_paint_choice(_start_theme_buttons, THEME_IDS.find(id))
 	_paint_theme_btns()
 	theme_previewed.emit(id)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _select_board_size(i: int) -> void:
 	_board_cells = BOARD_SIZES[clampi(i, 0, BOARD_SIZES.size() - 1)]
 	_paint_choice(_board_buttons, i)
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _select_char_team(t: int) -> void:
@@ -984,6 +1198,8 @@ func _select_char(style: int) -> void:
 	var tw := create_tween()
 	tw.tween_property(b, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_paint_char_ui()
+	if not _applying_prefs:
+		prefs_changed.emit()
 
 
 func _paint_char_ui() -> void:
@@ -1043,6 +1259,7 @@ func hide_start() -> void:
 	for n in _game_nodes:
 		if is_instance_valid(n):
 			n.visible = true
+	_set_teams_open(false, false)
 	_menu_panel.visible = false
 	_menu_open = false
 	_menu_button.text = "≡"
@@ -1055,10 +1272,64 @@ func set_sound(on: bool) -> void:
 	_sound_button.text = "音效：开" if on else "音效：关"
 
 
+func set_music(on: bool) -> void:
+	_music_on = on
+	_music_button.text = "主题音乐：开" if on else "主题音乐：关"
+
+
+## 当前所有可持久化的设定
+func prefs() -> Dictionary:
+	return {
+		"mode": _mode,
+		"level": _level,
+		"theme": _theme_id,
+		"cells": _board_cells,
+		"styles": _char_styles.duplicate(),
+		"sound": _sound_on,
+		"music": _music_on,
+		"pick_visible": _pick_visible,
+		"items_open": _items_open,
+	}
+
+
+## 套用本地存档的设定（不触发保存信号）
+func apply_prefs(p: Dictionary) -> void:
+	if p.is_empty():
+		return
+	_applying_prefs = true
+	if p.has("mode"):
+		_select_mode(clampi(int(p["mode"]), 0, 1))
+	if p.has("level"):
+		_select_level(clampi(int(p["level"]), 0, 2))
+	if p.has("theme") and THEME_IDS.has(String(p["theme"])):
+		_select_theme(String(p["theme"]))
+	if p.has("cells"):
+		_select_board_size(BOARD_SIZES.find(int(p["cells"])) if BOARD_SIZES.has(int(p["cells"])) else 0)
+	if p.has("styles"):
+		var st: Array = p["styles"]
+		for t in mini(st.size(), 4):
+			_char_styles[t] = clampi(int(st[t]), 0, CHAR_NAMES.size() - 1)
+		_paint_char_ui()
+	if p.has("sound"):
+		set_sound(bool(p["sound"]))
+		sound_toggled.emit(_sound_on)
+	if p.has("music"):
+		set_music(bool(p["music"]))
+		music_toggled.emit(_music_on)
+	if p.has("pick_visible"):
+		_pick_visible = bool(p["pick_visible"])
+		_pick_toggle.text = "走子列表：开" if _pick_visible else "走子列表：关"
+	if p.has("items_open"):
+		_items_open = bool(p["items_open"])
+		_apply_items_position(false)
+	_applying_prefs = false
+
+
 func set_turn(text: String, color: Color) -> void:
 	_turn_text = text
 	_turn_short = text.replace("当前回合：", "")
 	_turn_color = color
+	_paint_turn_bar()
 
 
 func set_dice(_value: int, _total := 0) -> void:

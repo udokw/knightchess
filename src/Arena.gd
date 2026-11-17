@@ -17,7 +17,9 @@ const DECK_HALF := 890.0
 ## 自然场景的地面高度：广场像真实村落广场一样贴着地面，而不是悬空的台子
 const SCENE_GROUND := -70.0
 const DICE_HOME_BASE := Vector3(0, 300, 0)
-const DICE_LAND := Vector3(0, 216, 0)
+const DICE_LAND := Vector3(0, 276, 0)
+## 骰子整体缩放：2 倍于原尺寸，保证手机屏上点数清晰可读
+const DICE_SCALE := 2.64
 
 const DIE_FACES := {
 	1: {"n": Vector3(1, 0, 0), "u": Vector3(0, 1, 0), "v": Vector3(0, 0, 1)},
@@ -198,6 +200,8 @@ var _theme_pts: Array = []
 var _theme_kind := "dusk"
 # 棋子拟人动画数据
 var _actors: Array = []
+## 程序化音效合成器（由 Main 注入，内部用 fx_sound 调用）
+var sfx: Node = null
 
 const PIECE_STYLE_NAMES := [
 	"骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵",
@@ -211,7 +215,7 @@ func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk",
 	_tile_size = tile_size
 	_board_scale = board_scale
 	# 骰子悬浮在棋盘正中央上空，慢慢自转，镜头一眼就能读到点数
-	_dice_home = Vector3(0.0, 400.0, 0.0)
+	_dice_home = Vector3(0.0, 460.0, 0.0)
 	# 棋盘不再整体缩放：格数越多，坐标外扩越大，格子世界尺寸恒定，画面更清晰不拥挤
 	_build_environment()
 	_build_ground()
@@ -299,8 +303,23 @@ func _process(delta: float) -> void:
 			continue
 		var body: Node3D = a["body"]
 		var ph: float = a["phase"]
+		var style_i := int(a["style"])
 		body.position.y = sin(_time * 2.2 + ph) * 2.4
 		body.rotation.z = sin(_time * 1.7 + ph) * 0.022
+		body.rotation.x = sin(_time * 1.1 + ph) * 0.018
+		var gem: Node3D = a.get("gem")
+		if is_instance_valid(gem):
+			gem.rotation.y += delta * 1.9
+			var gp: float = 1.0 + sin(_time * 3.4 + ph) * 0.16
+			gem.scale = Vector3(gp, gp, gp)
+		var orbit: Node3D = a.get("orbit")
+		if is_instance_valid(orbit):
+			var oa: float = _time * (1.6 + 0.12 * float(style_i)) + ph
+			orbit.position = Vector3(cos(oa) * 42.0, 66.0 + sin(_time * 2.6 + ph) * 12.0, sin(oa) * 42.0)
+		if style_i == 1 or style_i == 7:
+			var spin_plume: Node3D = a["plume"]
+			if is_instance_valid(spin_plume):
+				spin_plume.rotation.y += delta * 0.9
 		var cape: Node3D = a["cape"]
 		if is_instance_valid(cape):
 			cape.rotation.x = 0.12 + sin(_time * 2.9 + ph) * 0.10
@@ -1952,9 +1971,22 @@ func make_piece(team: int, style := 0) -> Node3D:
 	gem.name = "Gem"
 	body.add_child(gem)
 
+	# 绕体灵光：给每个棋子一点持续的微动态，站着也不死板
+	var orbit := MeshInstance3D.new()
+	var os2 := SphereMesh.new()
+	os2.radius = 2.6
+	os2.height = 5.2
+	os2.radial_segments = 6
+	os2.rings = 3
+	orbit.mesh = os2
+	orbit.material_override = _unshaded(team_colors[team].lightened(0.35), 2.0)
+	orbit.name = "Orbit"
+	body.add_child(orbit)
+
 	# 棋子随棋盘一起缩放：28 格时棋子更小、52 格时更大，与格子比例保持一致
 	_actors.append({
 		"root": root, "body": body, "cape": cape, "plume": plume, "banner": banner,
+		"gem": gem, "orbit": orbit,
 		"phase": randf() * TAU, "style": style,
 	})
 	return root
@@ -2009,6 +2041,35 @@ func piece_hit(node: Node3D) -> void:
 	t.tween_property(body, "rotation:y", 0.0, 0.12)
 
 
+## 播放合成音效：sfx 由 Main 注入，缺失时静默跳过
+func fx_sound(kind: String, vol_db := 0.0, pitch := 1.0) -> void:
+	if sfx == null or not is_instance_valid(sfx):
+		return
+	if not sfx.has_method("play"):
+		return
+	sfx.play(kind, vol_db, pitch)
+
+
+## 道具命中瞬间：棋子本体按道具类型弹出不同力道，避免所有道具一个手感
+func _cast_pop(node: Node3D, kind: String) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var t := create_tween()
+	if kind in ["boost", "double", "warp", "teleport", "moonstep", "inferno", "gale"]:
+		# 向上类：先拔高拉长，再回弹
+		t.tween_property(node, "scale", Vector3(0.86, 1.24, 0.86), 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	elif kind in ["shield", "jadeguard", "freeze", "frostlock"]:
+		# 防护类：向外撑开压扁，像罩上护罩
+		t.tween_property(node, "scale", Vector3(1.24, 0.84, 1.24), 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	elif kind in ["snipe", "swap", "steal", "bomb", "vortex", "voidstep"]:
+		# 攻击类：两下急促抖动
+		t.tween_property(node, "scale", Vector3(1.16, 1.16, 1.16), 0.06)
+		t.tween_property(node, "scale", Vector3(0.92, 0.92, 0.92), 0.07)
+	else:
+		t.tween_property(node, "scale", Vector3(1.12, 1.12, 1.12), 0.12)
+	t.tween_property(node, "scale", Vector3.ONE, 0.26).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
 ## 胜利 / 吃到棋子：原地旋转 + 弹跳
 func piece_celebrate(node: Node3D) -> void:
 	if node == null:
@@ -2022,6 +2083,66 @@ func piece_celebrate(node: Node3D) -> void:
 	t.tween_property(body, "rotation:y", body.rotation.y + TAU, 0.7).set_trans(Tween.TRANS_CUBIC)
 	t.tween_property(body, "scale", Vector3(1.15, 1.15, 1.15), 0.18)
 	t.chain().tween_property(body, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_BACK)
+
+
+## 吃棋：慢动作腾空跃起，砸落时把对手压扁踩爆
+func capture_stomp(attacker: Node3D, victim: Node3D, color: Color) -> void:
+	if attacker == null or not is_instance_valid(attacker):
+		return
+	var a := _actor_of(attacker)
+	var body: Node3D = a.get("body", null) if not a.is_empty() else null
+	var start := attacker.position
+	var vpos := start
+	if victim != null and is_instance_valid(victim):
+		vpos = victim.position
+	var flat := Vector2(vpos.x - start.x, vpos.z - start.z)
+	if flat.length() > 1.0:
+		attacker.rotation.y = atan2(vpos.x - start.x, vpos.z - start.z)
+	# 1. 下蹲蓄力
+	if body != null:
+		var crouch := create_tween()
+		crouch.set_parallel(true)
+		crouch.tween_property(body, "position:y", -11.0, 0.18).set_trans(Tween.TRANS_QUAD)
+		crouch.tween_property(body, "scale", Vector3(1.14, 0.84, 1.14), 0.18)
+		await crouch.finished
+	# 2. 高高跃起，越过对手头顶
+	fx_sound("cap_jump")
+	var apex := Vector3(vpos.x, start.y + 205.0, vpos.z)
+	var jump := create_tween()
+	jump.set_parallel(true)
+	jump.tween_property(attacker, "position", apex, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if body != null:
+		jump.tween_property(body, "position:y", 0.0, 0.24)
+		jump.tween_property(body, "scale", Vector3(0.9, 1.18, 0.9), 0.24)
+	await jump.finished
+	# 3. 急坠砸下
+	var fall := create_tween()
+	fall.set_parallel(true)
+	fall.tween_property(attacker, "position", Vector3(vpos.x, vpos.y, vpos.z), 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	if body != null:
+		fall.tween_property(body, "scale", Vector3(1.24, 0.8, 1.24), 0.2)
+	await fall.finished
+	# 4. 落地：压扁受害者 + 冲击波 + 碎屑
+	fx_sound("cap_slam")
+	impact(Vector3(vpos.x, TILE_TOP, vpos.z), color)
+	_shockwave(vpos, color, 0.0, 4.6, 0.5)
+	_fx_shards(Vector3(vpos.x, TILE_TOP + 2.0, vpos.z), color.lightened(0.2), 12, 70.0, 90.0, 6.0, 0.5)
+	if victim != null and is_instance_valid(victim):
+		var squash := create_tween()
+		squash.set_parallel(true)
+		squash.tween_property(victim, "scale", Vector3(1.55, 0.12, 1.55), 0.09)
+		squash.tween_property(victim, "position:y", vpos.y - 7.0, 0.09)
+		await squash.finished
+		fx_sound("cap_squash")
+		capture_blast(vpos, color)
+	if body != null:
+		var land := create_tween()
+		land.set_parallel(true)
+		land.tween_property(body, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		land.tween_property(body, "position:y", 0.0, 0.18)
+		await land.finished
+	fx_sound("cap_win", -2.0)
+	piece_celebrate(attacker)
 
 
 func _build_pawn_mesh() -> ArrayMesh:
@@ -2104,7 +2225,7 @@ func _build_dice() -> void:
 	_dice = Node3D.new()
 	_dice.name = "Dice"
 	_dice.position = _dice_home
-	_dice.scale = Vector3(1.32, 1.32, 1.32)
+	_dice.scale = Vector3.ONE * DICE_SCALE
 	add_child(_dice)
 
 	# 立体骰子模型：六块面板 + 12 条倒角棱 + 8 个圆角球，拼成一颗真正圆润的骰子
@@ -2278,9 +2399,9 @@ func roll_dice(value: int) -> void:
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	drop.tween_property(_dice, "position", land, 0.22) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	drop.tween_property(_dice, "position:y", land.y + 54.0, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	drop.tween_property(_dice, "position:y", land.y + 108.0, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	drop.tween_property(_dice, "position:y", land.y, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	drop.tween_property(_dice, "position:y", land.y + 24.0, 0.09)
+	drop.tween_property(_dice, "position:y", land.y + 48.0, 0.09)
 	drop.tween_property(_dice, "position:y", land.y, 0.09)
 
 	await drop.finished
@@ -2290,8 +2411,8 @@ func roll_dice(value: int) -> void:
 	_dice.rotation = rest
 	# 落地挤压：骰子砸下来瞬间压扁再弹回，撞击才有重量
 	var squash := create_tween()
-	squash.tween_property(_dice, "scale", Vector3(1.58, 1.06, 1.58), 0.07).set_trans(Tween.TRANS_QUAD)
-	squash.tween_property(_dice, "scale", Vector3(1.32, 1.32, 1.32), 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	squash.tween_property(_dice, "scale", Vector3(DICE_SCALE * 1.2, DICE_SCALE * 0.8, DICE_SCALE * 1.2), 0.07).set_trans(Tween.TRANS_QUAD)
+	squash.tween_property(_dice, "scale", Vector3.ONE * DICE_SCALE, 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	impact(land, Color("ffe6b0"))
 	await get_tree().create_timer(0.55).timeout
 
@@ -2655,85 +2776,607 @@ func item_pickup(pos: Vector3, color: Color) -> void:
 		t.chain().tween_callback(mi.queue_free)
 
 
-## 使用道具：棋子专属光效（按道具类型分支）
+## 使用道具：每种道具有自己的专属表现，不再统一套冲击波
 func item_cast(node: Node3D, color: Color, kind: String) -> void:
 	if node == null or not is_instance_valid(node):
 		return
 	var p := node.global_position
-	item_aura(node, color)
-	burst(Vector3(p.x, 0.0, p.z), color, 16)
-	finish_beam(Vector3(p.x, 0.0, p.z), color)
-
+	var g := Vector3(p.x, TILE_TOP + 2.0, p.z)
+	# 每种道具有独立音色，棋子本体同时给出对应力道的弹压反馈
+	fx_sound("it_" + kind)
+	_cast_pop(node, kind)
 	match kind:
-		"boost", "double":
-			# 三道上升箭头
-			for k in 3:
-				var arrow := MeshInstance3D.new()
-				var cm := CylinderMesh.new()
-				cm.top_radius = 0.0
-				cm.bottom_radius = 16.0
-				cm.height = 34.0
-				cm.radial_segments = 8
-				arrow.mesh = cm
-				arrow.material_override = _unshaded(color.lightened(0.35), 3.2)
-				var a2 := TAU * float(k) / 3.0
-				arrow.position = Vector3(p.x + cos(a2) * 40.0, 20.0, p.z + sin(a2) * 40.0)
-				arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-				_fx.add_child(arrow)
-				var t2 := create_tween()
-				t2.set_parallel(true)
-				t2.tween_property(arrow, "position:y", 190.0, 0.62).set_delay(0.06 * float(k)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-				t2.tween_property(arrow, "scale", Vector3(0.2, 0.2, 0.2), 0.62)
-				t2.tween_property(arrow.material_override, "albedo_color:a", 0.0, 0.62)
-				t2.chain().tween_callback(arrow.queue_free)
-		"warp", "teleport":
-			# 地面传送门 + 逆向漩涡
-			for k in 2:
-				var ring := _glow_ring(color, 40.0 + float(k) * 12.0, 48.0 + float(k) * 12.0)
-				ring.position = Vector3(p.x, TILE_TOP + 3.0, p.z)
-				ring.rotation.x = deg_to_rad(90.0)
-				var t3 := create_tween()
-				t3.set_parallel(true)
-				t3.tween_property(ring, "scale", Vector3(0.2, 0.2, 0.2), 0.7).set_delay(0.1 * float(k))
-				t3.tween_property(ring, "rotation:z", 6.0, 0.7)
-				t3.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.7)
-				t3.chain().tween_callback(ring.queue_free)
-		"freeze", "frostlock":
-			freeze_burst(Vector3(p.x, 0.0, p.z), color)
-		"inferno":
-			_shockwave(Vector3(p.x, 0.0, p.z), color, 0.0, 4.0, 0.5)
-			_shockwave(Vector3(p.x, 0.0, p.z), color.lightened(0.4), 0.08, 5.2, 0.55)
-			for k in 4:
-				var a3 := TAU * float(k) / 4.0
-				var col := MeshInstance3D.new()
-				var cm2 := CylinderMesh.new()
-				cm2.top_radius = 20.0
-				cm2.bottom_radius = 6.0
-				cm2.height = 120.0
-				cm2.radial_segments = 12
-				col.mesh = cm2
-				col.material_override = _unshaded(color, 2.2)
-				col.position = Vector3(p.x + cos(a3) * 52.0, 60.0, p.z + sin(a3) * 52.0)
-				col.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-				_fx.add_child(col)
-				var t4 := create_tween()
-				t4.set_parallel(true)
-				t4.tween_property(col, "scale", Vector3(0.2, 1.6, 0.2), 0.6)
-				t4.tween_property(col.material_override, "albedo_color:a", 0.0, 0.6)
-				t4.chain().tween_callback(col.queue_free)
-		"moonstep":
-			for k in 3:
-				var cres := _glow_ring(color.lightened(0.3), 36.0 + float(k) * 10.0, 42.0 + float(k) * 10.0)
-				cres.position = Vector3(p.x, 26.0 + float(k) * 34.0, p.z)
-				cres.scale = Vector3(0.3, 1.0, 0.3)
-				var t5 := create_tween()
-				t5.tween_property(cres, "scale", Vector3(1.5, 1.0, 1.5), 0.45).set_delay(0.08 * float(k))
-				t5.parallel().tween_property(cres.material_override, "albedo_color:a", 0.0, 0.45).set_delay(0.08 * float(k))
-				t5.chain().tween_callback(cres.queue_free)
+		"boost":
+			item_aura(node, color)
+			_fx_arrows(g, color)
+		"double":
+			item_aura(node, color)
+			_fx_arrows(g, color.lightened(0.25))
+			_shockwave(g, color, 0.0, 3.0, 0.5)
+			_shockwave(g, color.lightened(0.3), 0.12, 4.4, 0.6)
+		"warp":
+			_fx_portal(g, color)
+		"teleport":
+			_fx_portal(g, color.lightened(0.2))
+			finish_beam(g, color)
+		"snipe":
+			_fx_reticle(g, color)
 		"swap":
-			_shockwave(Vector3(p.x, 0.0, p.z), color, 0.0, 3.4, 0.5)
+			_fx_link(g, color)
+		"freeze":
+			freeze_burst(g, color)
+		"frostlock":
+			freeze_burst(g, color)
+			_fx_chains(g, color.lightened(0.2))
+		"inferno":
+			_fx_geysers(g, color)
+		"moonstep":
+			_fx_moon(g, color)
+		"vortex":
+			_fx_spiral(g, color, 22, 96.0, 150.0, true)
+		"steal":
+			_fx_slashes(g, color, 2)
+			_fx_coins(g, color, 8)
+		"bomb":
+			_fx_bomb(g, color)
+		"gale":
+			_fx_wind(g, color, 22)
+		"jadeguard":
+			_fx_dome(g, color, 96.0, 0.9)
+			_fx_runes(g, color, 60.0, 10)
+		"shield":
+			_fx_dome(g, color, 78.0, 0.75)
+			_fx_runes(g, color, 46.0, 6)
+		"voidstep":
+			_fx_rift(g, color)
+			_fx_spiral(g, color, 14, 72.0, 110.0, true)
 		_:
-			_shockwave(Vector3(p.x, 0.0, p.z), color, 0.0, 3.0, 0.5)
+			item_aura(node, color)
+			_shockwave(g, color, 0.0, 2.2, 0.45)
+
+
+# ---------------------------------------------------------------- 专属特效零件
+
+func _fx_mesh(mesh: Mesh, pos: Vector3, color: Color, energy := 3.0) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = _unshaded(color, energy)
+	mi.position = pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(mi)
+	return mi
+
+
+## 上升箭头（加速类道具）
+func _fx_arrows(g: Vector3, color: Color) -> void:
+	for k in 3:
+		var arrow := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = 16.0
+		cm.height = 34.0
+		cm.radial_segments = 8
+		arrow.mesh = cm
+		arrow.material_override = _unshaded(color.lightened(0.35), 3.2)
+		var a := TAU * float(k) / 3.0
+		arrow.position = Vector3(g.x + cos(a) * 40.0, g.y + 18.0, g.z + sin(a) * 40.0)
+		arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_fx.add_child(arrow)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(arrow, "position:y", g.y + 188.0, 0.62).set_delay(0.06 * float(k)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(arrow, "scale", Vector3(0.2, 0.2, 0.2), 0.62)
+		t.tween_property(arrow.material_override, "albedo_color:a", 0.0, 0.62)
+		t.chain().tween_callback(arrow.queue_free)
+
+
+## 传送门：三重光环从外向内塌缩，带一点旋转
+func _fx_portal(g: Vector3, color: Color) -> void:
+	for k in 3:
+		var ring := _glow_ring(color, 38.0 + float(k) * 12.0, 46.0 + float(k) * 12.0)
+		ring.position = g + Vector3(0, 3.0, 0)
+		ring.rotation.x = PI * 0.5
+		ring.scale = Vector3(2.4, 2.4, 2.4)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(ring, "scale", Vector3(0.1, 0.1, 0.1), 0.55).set_delay(0.08 * float(k)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_property(ring, "rotation:y", 7.0, 0.55)
+		t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.55)
+		t.chain().tween_callback(ring.queue_free)
+
+
+## 狙击准星：落地光环 + 十字刻度 + 中心亮点
+func _fx_reticle(g: Vector3, color: Color) -> void:
+	var ring := _glow_ring(color, 46.0, 54.0)
+	ring.position = g + Vector3(0, 3.0, 0)
+	ring.scale = Vector3(1.6, 1.6, 1.6)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(ring, "scale", Vector3(0.4, 0.4, 0.4), 0.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.3).set_delay(0.1)
+	t.chain().tween_callback(ring.queue_free)
+	for k in 4:
+		var a := TAU * float(k) / 4.0
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.0, 34.0, 3.0)
+		var tick := _fx_mesh(bm, g + Vector3(cos(a) * 78.0, 16.0, sin(a) * 78.0), color, 3.4)
+		tick.rotation.y = -a
+		var t2 := create_tween()
+		t2.set_parallel(true)
+		t2.tween_property(tick, "position", g + Vector3(cos(a) * 30.0, 16.0, sin(a) * 30.0), 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t2.tween_property(tick.material_override, "albedo_color:a", 0.0, 0.3).set_delay(0.1)
+		t2.chain().tween_callback(tick.queue_free)
+
+
+## 换位：两个相互咬合旋转的光环
+func _fx_link(g: Vector3, color: Color) -> void:
+	for k in 2:
+		var ring := _glow_ring(color if k == 0 else color.lightened(0.3), 34.0, 42.0)
+		ring.position = g + Vector3(0, 46.0 + float(k) * 26.0, 0)
+		ring.rotation.x = PI * 0.5
+		ring.rotation.z = 0.5 if k == 0 else -0.5
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(ring, "rotation:y", 8.0 if k == 0 else -8.0, 0.6)
+		t.tween_property(ring, "position:y", g.y + 120.0, 0.6).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.6).set_delay(0.2)
+		t.chain().tween_callback(ring.queue_free)
+
+
+## 月步：三层月牙向上抬升
+func _fx_moon(g: Vector3, color: Color) -> void:
+	for k in 3:
+		var cres := _glow_ring(color.lightened(0.3), 36.0 + float(k) * 10.0, 42.0 + float(k) * 10.0)
+		cres.position = g + Vector3(0, 26.0 + float(k) * 34.0, 0)
+		cres.scale = Vector3(0.3, 1.0, 0.3)
+		var t := create_tween()
+		t.tween_property(cres, "scale", Vector3(1.5, 1.0, 1.5), 0.45).set_delay(0.08 * float(k))
+		t.parallel().tween_property(cres, "position:y", g.y + 150.0, 0.5).set_delay(0.08 * float(k))
+		t.parallel().tween_property(cres.material_override, "albedo_color:a", 0.0, 0.45).set_delay(0.08 * float(k))
+		t.chain().tween_callback(cres.queue_free)
+
+
+## 炸弹：先亮引信，再炸成碎块与火点
+func _fx_bomb(g: Vector3, color: Color) -> void:
+	var sm := SphereMesh.new()
+	sm.radius = 16.0
+	sm.height = 32.0
+	sm.radial_segments = 10
+	sm.rings = 6
+	var bomb := _fx_mesh(sm, g + Vector3(0, 18.0, 0), Color("3a3f4a"), 0.6)
+	(bomb.material_override as StandardMaterial3D).shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var fuse := _fx_mesh(sm, g + Vector3(0, 40.0, 0), Color("ffd166"), 4.0)
+	fuse.scale = Vector3(0.18, 0.18, 0.18)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(fuse, "position:y", g.y + 52.0, 0.5).set_trans(Tween.TRANS_SINE)
+	t.tween_property(fuse, "scale", Vector3(0.05, 0.05, 0.05), 0.5)
+	t.chain().tween_callback(func():
+		bomb.visible = false
+		fuse.visible = false
+		burst(g, color, 22)
+		_fx_shards(g, color.lightened(0.2), 16, 110.0, 130.0, 7.0, 0.55)
+		_fx_fire_puffs(g, color, 6)
+		bomb.queue_free()
+		fuse.queue_free())
+
+
+## 火球烟团
+func _fx_fire_puffs(g: Vector3, color: Color, count := 6) -> void:
+	for i in count:
+		var sm := SphereMesh.new()
+		sm.radius = 22.0
+		sm.height = 44.0
+		sm.radial_segments = 8
+		sm.rings = 5
+		var a := TAU * float(i) / float(count) + randf() * 0.4
+		var mi := _fx_mesh(sm, g + Vector3(cos(a) * 26.0, 24.0, sin(a) * 26.0), color if i % 2 == 0 else Color("ffb347"), 2.4)
+		mi.scale = Vector3(0.4, 0.4, 0.4)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", g + Vector3(cos(a) * 88.0, 70.0, sin(a) * 88.0), 0.6).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "scale", Vector3(1.5, 1.5, 1.5), 0.6)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.6)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 飞散碎屑
+func _fx_shards(g: Vector3, color: Color, count := 12, spread := 90.0, up := 120.0, size := 6.0, life := 0.6) -> void:
+	for i in count:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(size, size, size)
+		var mi := _fx_mesh(bm, g + Vector3(0, 8.0, 0), color, 2.6)
+		var a := TAU * randf()
+		var r := spread * randf_range(0.4, 1.0)
+		var end := Vector3(g.x + cos(a) * r, g.y + randf_range(6.0, up), g.z + sin(a) * r)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", end, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "rotation", Vector3(randf() * TAU, randf() * TAU, randf() * TAU), life)
+		t.tween_property(mi, "scale", Vector3.ONE * 0.1, life)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, life)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 地面尖刺
+func _fx_spikes(g: Vector3, color: Color, count := 8, radius := 32.0, height := 60.0) -> void:
+	for i in count:
+		var a := TAU * float(i) / float(count) + randf() * 0.2
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = 10.0
+		cm.height = height
+		cm.radial_segments = 6
+		var mi := _fx_mesh(cm, Vector3(g.x + cos(a) * radius, g.y - height * 0.5, g.z + sin(a) * radius), color, 2.8)
+		mi.rotation.z = randf_range(-0.2, 0.2)
+		var t := create_tween()
+		t.tween_property(mi, "position:y", g.y + height * 0.34, 0.18).set_delay(0.03 * float(i)).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_interval(0.24)
+		t.set_parallel(true)
+		t.tween_property(mi, "position:y", g.y - height, 0.3)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.3)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 半透明护罩
+func _fx_dome(g: Vector3, color: Color, radius := 90.0, life := 0.7) -> void:
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	sm.radial_segments = 20
+	sm.rings = 10
+	var mi := _fx_mesh(sm, g + Vector3(0, 4.0, 0), color, 1.4)
+	var mat := mi.material_override as StandardMaterial3D
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.22)
+	mi.scale = Vector3(0.2, 0.2, 0.2)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(mi, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_property(mat, "albedo_color:a", 0.0, life).set_delay(0.2)
+	t.chain().tween_callback(mi.queue_free)
+
+
+## 金币雨
+func _fx_coins(g: Vector3, color: Color, count := 14) -> void:
+	for i in count:
+		var cm := CylinderMesh.new()
+		cm.top_radius = 7.0
+		cm.bottom_radius = 7.0
+		cm.height = 1.6
+		cm.radial_segments = 10
+		var off := Vector3(randf_range(-72.0, 72.0), 0.0, randf_range(-72.0, 72.0))
+		var mi := _fx_mesh(cm, Vector3(g.x + off.x, g.y + 250.0, g.z + off.z), color, 2.2)
+		mi.rotation.x = PI * 0.5
+		var d := 0.04 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position:y", g.y + 4.0, 0.45 + randf() * 0.3).set_delay(d).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_property(mi, "rotation:z", randf_range(-9.0, 9.0), 0.75)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.22).set_delay(d + 0.42)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 风：横向掠过的气刃
+func _fx_wind(g: Vector3, color: Color, count := 20, speed := 250.0) -> void:
+	for i in count:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(52.0, 1.4, 1.4)
+		var mi := _fx_mesh(bm, Vector3(g.x + randf_range(-50.0, 30.0), g.y + randf_range(8.0, 96.0), g.z + randf_range(-46.0, 46.0)), color, 2.4)
+		mi.rotation.y = randf_range(-0.45, 0.45)
+		var d := 0.025 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position:x", mi.position.x + speed, 0.32).set_delay(d).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "scale", Vector3(1.6, 1.0, 1.0), 0.32).set_delay(d)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.32).set_delay(d)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 刀光
+func _fx_slashes(g: Vector3, color: Color, count := 3) -> void:
+	for i in count:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(190.0, 2.4, 5.0)
+		var mi := _fx_mesh(bm, g + Vector3(0, 56.0 + float(i) * 26.0, 0), color, 3.4)
+		mi.rotation.y = TAU * float(i) / float(count) + 0.4
+		mi.scale = Vector3(0.1, 1.0, 1.0)
+		var d := 0.06 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "scale:x", 1.0, 0.16).set_delay(d).set_trans(Tween.TRANS_QUAD)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.3).set_delay(d + 0.18)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 环绕符文
+func _fx_runes(g: Vector3, color: Color, radius := 56.0, count := 8) -> void:
+	for i in count:
+		var a := TAU * float(i) / float(count)
+		var bm := BoxMesh.new()
+		bm.size = Vector3(4.0, 14.0, 4.0)
+		var mi := _fx_mesh(bm, Vector3(g.x + cos(a) * radius, g.y + 8.0, g.z + sin(a) * radius), color, 3.0)
+		var t := create_tween()
+		t.tween_property(mi, "position:y", g.y + 42.0, 0.5).set_delay(0.03 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.set_parallel(true)
+		t.tween_property(mi, "rotation:y", 2.0, 0.5)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.5)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 螺旋（inward = 吸入，否则上旋外扩）
+func _fx_spiral(g: Vector3, color: Color, count := 20, radius := 70.0, height := 150.0, inward := false) -> void:
+	for i in count:
+		var a := TAU * 2.0 * float(i) / float(count)
+		var h := height * float(i) / float(count)
+		var sm := SphereMesh.new()
+		sm.radius = 4.0
+		sm.height = 8.0
+		sm.radial_segments = 6
+		sm.rings = 3
+		var start_r := radius if not inward else 5.0
+		var end_r := 5.0 if not inward else radius
+		var start_y := g.y + 10.0 + h
+		var end_y := (g.y + height + 24.0) if not inward else (g.y + 10.0)
+		var mi := _fx_mesh(sm, Vector3(g.x + cos(a) * start_r, start_y, g.z + sin(a) * start_r), color, 3.0)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", Vector3(g.x + cos(a + 3.4) * end_r, end_y, g.z + sin(a + 3.4) * end_r), 0.55).set_delay(0.02 * float(i))
+		t.tween_property(mi, "scale", Vector3.ONE * 0.2, 0.55)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.55)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 空间裂隙：竖立的暗色裂缝 + 被吸入的碎光
+func _fx_rift(g: Vector3, color: Color) -> void:
+	var qm := QuadMesh.new()
+	qm.size = Vector2(96.0, 240.0)
+	var mi := _fx_mesh(qm, g + Vector3(0, 120.0, 0), color, 2.6)
+	var mat := mi.material_override as StandardMaterial3D
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_color = Color(color.r * 0.35, color.g * 0.25, color.b * 0.55, 0.85)
+	mi.rotation.y = randf_range(-0.5, 0.5)
+	mi.scale = Vector3(0.05, 0.5, 1.0)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(mi, "scale", Vector3(1.0, 1.0, 1.0), 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(mi, "rotation:y", mi.rotation.y + 1.8, 0.8)
+	t.tween_property(mat, "albedo_color:a", 0.0, 0.45).set_delay(0.3)
+	t.chain().tween_callback(mi.queue_free)
+
+
+## 铁链（诅咒/霜锁）
+func _fx_chains(g: Vector3, color: Color) -> void:
+	for i in 5:
+		var tm := TorusMesh.new()
+		tm.inner_radius = 7.0
+		tm.outer_radius = 13.0
+		tm.rings = 12
+		tm.ring_segments = 5
+		var a := TAU * float(i) / 5.0
+		var mi := _fx_mesh(tm, Vector3(g.x + cos(a) * 40.0, g.y + 210.0 + float(i) * 26.0, g.z + sin(a) * 40.0), color, 2.6)
+		mi.rotation.y = a
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position:y", g.y + 6.0, 0.42).set_delay(0.05 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_property(mi, "rotation:x", 6.0, 0.42)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.3).set_delay(0.35 + 0.05 * float(i))
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 彩色混沌球
+func _fx_chaos(g: Vector3, count := 12) -> void:
+	var palette := [Color("ff6b6b"), Color("ffd93d"), Color("6bcb77"), Color("4d96ff"), Color("c77dff")]
+	for i in count:
+		var sm := SphereMesh.new()
+		sm.radius = 6.0
+		sm.height = 12.0
+		sm.radial_segments = 8
+		sm.rings = 4
+		var a := TAU * float(i) / float(count)
+		var mi := _fx_mesh(sm, g + Vector3(cos(a) * 30.0, 20.0, sin(a) * 30.0), palette[i % palette.size()], 3.2)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", g + Vector3(cos(a + 4.2) * 92.0, 40.0 + randf_range(-20.0, 110.0), sin(a + 4.2) * 92.0), 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "scale", Vector3.ONE * 0.2, 0.7)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.7)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 星辉：菱形星光缓缓飘落
+func _fx_stars(g: Vector3, color: Color, count := 18) -> void:
+	for i in count:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.0, 12.0, 3.0)
+		var off := Vector3(randf_range(-100.0, 100.0), 0.0, randf_range(-100.0, 100.0))
+		var mi := _fx_mesh(bm, g + off + Vector3(0, 240.0, 0), color.lightened(0.35), 3.4)
+		mi.rotation = Vector3(0.6, randf_range(0.0, TAU), 0.6)
+		var d := 0.03 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position:y", g.y + randf_range(6.0, 40.0), 0.55).set_delay(d).set_trans(Tween.TRANS_SINE)
+		t.tween_property(mi, "rotation:y", randf_range(2.0, 6.0), 0.55)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.3).set_delay(d + 0.3)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 暴风雪：雪花 + 冰晶
+func _fx_snow(g: Vector3, color: Color) -> void:
+	freeze_burst(g, color)
+	for i in 22:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.0, 3.0, 3.0)
+		var off := Vector3(randf_range(-110.0, 110.0), 0.0, randf_range(-110.0, 110.0))
+		var mi := _fx_mesh(bm, g + off + Vector3(0, 260.0, 0), Color("dff2ff"), 2.0)
+		var d := 0.04 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", Vector3(mi.position.x + randf_range(-60.0, 60.0), g.y + 4.0, mi.position.z + randf_range(-60.0, 60.0)), 0.8).set_delay(d).set_trans(Tween.TRANS_SINE)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.25).set_delay(d + 0.6)
+		t.chain().tween_callback(mi.queue_free)
+
+
+## 火山喷发：三股岩浆柱 + 火星
+func _fx_geysers(g: Vector3, color: Color) -> void:
+	_shockwave(g, color, 0.0, 3.6, 0.55)
+	for i in 3:
+		var a := TAU * float(i) / 3.0
+		var base := g + Vector3(cos(a) * 44.0, 0.0, sin(a) * 44.0)
+		var cm := CylinderMesh.new()
+		cm.top_radius = 26.0
+		cm.bottom_radius = 8.0
+		cm.height = 130.0
+		cm.radial_segments = 10
+		var col := _fx_mesh(cm, base + Vector3(0, 20.0, 0), color, 2.6)
+		col.scale = Vector3(0.35, 0.1, 0.35)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(col, "scale", Vector3(0.85, 1.6, 0.85), 0.42).set_delay(0.06 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(col.material_override, "albedo_color:a", 0.0, 0.4).set_delay(0.3 + 0.06 * float(i))
+		t.chain().tween_callback(col.queue_free)
+		_fx_shards(base, color.lightened(0.25), 6, 38.0, 130.0, 5.0, 0.6)
+
+
+## 地震：放射状地裂 + 尘土
+func _fx_quake(g: Vector3, color: Color) -> void:
+	_shockwave(g, color.darkened(0.25), 0.0, 7.0, 0.65)
+	_shockwave(g, color, 0.1, 9.0, 0.75)
+	for i in 10:
+		var a := TAU * float(i) / 10.0 + randf() * 0.22
+		var len := randf_range(70.0, 150.0)
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.6, 1.2, len)
+		var mi := _fx_mesh(bm, g + Vector3(cos(a) * len * 0.5, 1.0, sin(a) * len * 0.5), Color("8a6a4a"), 0.5)
+		mi.rotation.y = -a
+		mi.scale = Vector3(1.0, 1.0, 0.05)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "scale:z", 1.0, 0.16).set_delay(0.03 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.4).set_delay(0.35)
+		t.chain().tween_callback(mi.queue_free)
+	_fx_shards(g, Color("a08a6c"), 14, 120.0, 60.0, 8.0, 0.7)
+
+
+## 翠蛇：盘旋而上的蛇形链条
+func _fx_serpent(g: Vector3, color: Color) -> void:
+	for i in 18:
+		var a := 0.55 * float(i)
+		var tm := TorusMesh.new()
+		tm.inner_radius = 7.0
+		tm.outer_radius = 13.0
+		tm.rings = 10
+		tm.ring_segments = 5
+		var mi := _fx_mesh(tm, Vector3(g.x + cos(a) * 54.0, g.y + 12.0 + float(i) * 9.0, g.z + sin(a) * 54.0), color, 2.6)
+		mi.rotation.y = a
+		var d := 0.02 * float(i)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position:y", g.y + 200.0 + float(i) * 4.0, 0.55).set_delay(d).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "scale", Vector3.ONE * 0.2, 0.55).set_delay(d)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.55).set_delay(d)
+		t.chain().tween_callback(mi.queue_free)
+	_shockwave(g, color, 0.0, 3.0, 0.5)
+
+
+## 陨石：真实落石砸地
+func _fx_meteor(g: Vector3, color: Color) -> void:
+	_shockwave(g, color, 0.0, 3.4, 0.55)
+	for i in 3:
+		var sm := SphereMesh.new()
+		sm.radius = 22.0
+		sm.height = 44.0
+		sm.radial_segments = 8
+		sm.rings = 5
+		var rock := MeshInstance3D.new()
+		rock.mesh = sm
+		rock.material_override = _pbr(Color("5a3a26"), 0.1, 0.9)
+		var a := randf() * TAU
+		var target := Vector3(g.x + cos(a) * randf_range(18.0, 72.0), g.y + 14.0, g.z + sin(a) * randf_range(18.0, 72.0))
+		rock.position = target + Vector3(randf_range(-30.0, 30.0), 540.0 + float(i) * 70.0, randf_range(-30.0, 30.0))
+		rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_fx.add_child(rock)
+		var t := create_tween()
+		t.tween_property(rock, "position", target, 0.34 + 0.1 * float(i)).set_delay(0.07 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_callback(func():
+			impact(target, color)
+			_fx_shards(target, Color("8a6a4a"), 8, 56.0, 70.0, 7.0, 0.5)
+			rock.queue_free())
+
+
+## 轮盘大奖的天空法阵：细光柱 + 缓慢旋转的符文环，取代满屏核爆
+func sky_sigil(pos: Vector3, color: Color) -> void:
+	fx_sound("ev_sigil")
+	var ring := _glow_ring(color, 150.0, 168.0)
+	ring.position = Vector3(pos.x, 300.0, pos.z)
+	ring.rotation.x = PI * 0.5
+	ring.scale = Vector3(0.2, 0.2, 0.2)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(ring, "scale", Vector3(1.0, 1.0, 1.0), 0.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_property(ring, "rotation:y", 3.2, 1.1)
+	t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.6).set_delay(0.6)
+	t.chain().tween_callback(ring.queue_free)
+	var bcm := CylinderMesh.new()
+	bcm.top_radius = 10.0
+	bcm.bottom_radius = 42.0
+	bcm.height = 900.0
+	bcm.radial_segments = 16
+	bcm.cap_top = false
+	bcm.cap_bottom = false
+	var beam := _fx_mesh(bcm, Vector3(pos.x, 450.0, pos.z), color, 1.2)
+	(beam.material_override as StandardMaterial3D).albedo_color = Color(color.r, color.g, color.b, 0.16)
+	var tb := create_tween()
+	tb.set_parallel(true)
+	tb.tween_property(beam, "scale", Vector3(0.15, 1.0, 0.15), 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tb.tween_property(beam.material_override, "albedo_color:a", 0.0, 0.5).set_delay(0.4)
+	tb.chain().tween_callback(beam.queue_free)
+
+
+## 每个随机事件一套独立视觉
+func event_fx(id: String, pos: Vector3, color: Color) -> void:
+	var g := Vector3(pos.x, TILE_TOP + 2.0, pos.z)
+	fx_sound("ev_" + id)
+	match id:
+		"treasure":
+			_fx_runes(g, color, 44.0, 8)
+			_fx_coins(g, color, 10)
+		"meteor":
+			_fx_meteor(g, color)
+		"tailwind":
+			_fx_wind(g, color, 22)
+		"trap":
+			_fx_spikes(g, color, 8, 30.0, 64.0)
+			_shockwave(g, color, 0.12, 2.4, 0.4)
+		"portal":
+			_fx_portal(g, color)
+		"chaos":
+			_fx_chaos(g, 12)
+		"bless":
+			_fx_dome(g, color, 84.0, 0.8)
+			_fx_runes(g, color, 40.0, 6)
+		"starlight":
+			_fx_stars(g, color)
+		"blizzard":
+			_fx_snow(g, color)
+		"eruption":
+			_fx_geysers(g, color)
+		"ambush":
+			_fx_slashes(g, color, 4)
+			_fx_shards(g, color, 10, 80.0, 90.0, 5.0, 0.5)
+		"goldrain":
+			_fx_coins(g, color, 24)
+			_shockwave(g, color, 0.0, 2.2, 0.5)
+		"earthquake":
+			_fx_quake(g, color)
+		"curse":
+			_fx_spikes(g, color.darkened(0.1), 6, 26.0, 52.0)
+			_fx_chains(g, color)
+		"jadeserpent":
+			_fx_serpent(g, color)
+		"voidrift":
+			_fx_rift(g, color)
+			_fx_spiral(g, color, 16, 82.0, 130.0, true)
+		_:
+			_shockwave(g, color, 0.0, 2.6, 0.5)
 
 
 ## 冰晶爆发

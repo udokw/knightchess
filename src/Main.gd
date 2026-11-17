@@ -152,17 +152,28 @@ var sfx_tick: AudioStreamPlayer
 var sfx_win: AudioStreamPlayer
 var sfx_drop: AudioStreamPlayer
 var _amb_streams: Dictionary = {}
+## 程序化合成音效：吃棋 / 道具 / 事件全部自带独立音色
+const SfxScript := preload("res://src/Sfx.gd")
+var sfx: Node = null
+var _sfx_on := true
+var _music_on := true
+var _cli_theme := false
+var _cli_cells := false
+var _saved_prefs: Dictionary = {}
 
 
 func _ready() -> void:
+	Engine.time_scale = 1.0
 	var mobile := OS.has_feature("mobile")
 	# 移动端省电：锁 30 帧，配合关闭实时阴影与减半粒子，长时间对局也不烫手
 	Engine.max_fps = 30 if mobile else 60
-	# PC 端直接跑满画质：渲染比例 1.0 + 2x MSAA。移动端仍保留 0.85、不开 MSAA
+	# PC 端直接跑满画质：渲染比例 1.0 + 2x MSAA。移动端用 FXAA 抗锯齿，边缘更干净
 	if not mobile:
 		var vp := get_viewport()
 		vp.scaling_3d_scale = 1.0
 		vp.msaa_3d = Viewport.MSAA_2X
+	else:
+		get_viewport().screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 	var all_args: Array = []
 	all_args.append_array(OS.get_cmdline_args())
 	all_args.append_array(OS.get_cmdline_user_args())
@@ -172,8 +183,10 @@ func _ready() -> void:
 			shot_path = a.substr(7)
 		elif a.begins_with("--theme="):
 			theme_id = a.substr(8)
+			_cli_theme = true
 		elif a.begins_with("--cells="):
 			board_cells = clampi(int(a.substr(8)), 20, 60)
+			_cli_cells = true
 		elif a == "--auto":
 			auto_mode = true
 		elif a == "--showcase":
@@ -181,6 +194,8 @@ func _ready() -> void:
 		elif a == "--menu":
 			menu_mode = true
 
+	# 先读本地设定，主题/棋盘/角色要在建场之前生效
+	_saved_prefs = _load_prefs()
 	_load_data()
 	_apply_board_size(FIELDS)
 	_setup_world()
@@ -349,6 +364,12 @@ func _update_camera() -> void:
 
 
 func _setup_audio() -> void:
+	sfx = SfxScript.new()
+	sfx.name = "Sfx"
+	sfx.enabled = _sfx_on
+	add_child(sfx)
+	if arena != null:
+		arena.sfx = sfx
 	dice_player = _make_player("res://assets/sounds/dice_move.wav", -3.0)
 	click_player = _make_player("res://assets/sounds/button_click.wav", -8.0)
 	nope_player = _make_player("res://assets/sounds/cant_move.wav", -8.0)
@@ -384,6 +405,9 @@ func _prepare_loop(s: AudioStream) -> void:
 func _apply_theme_audio() -> void:
 	if theme_amb == null:
 		return
+	if not _music_on:
+		theme_amb.stop()
+		return
 	var s: AudioStream = _amb_streams.get(theme_id, null)
 	if s == null:
 		return
@@ -402,6 +426,8 @@ func _make_player(path: String, db: float) -> AudioStreamPlayer:
 
 
 func _play(p: AudioStreamPlayer) -> void:
+	if not _sfx_on:
+		return
 	if p and p.stream:
 		p.play()
 
@@ -437,12 +463,80 @@ func _setup_hud() -> void:
 		theme_id = id
 		arena.set_theme(id)
 		_apply_theme_audio())
-	hud.sound_toggled.connect(func(on: bool): AudioServer.set_bus_mute(0, not on))
+	hud.sound_toggled.connect(func(on: bool):
+		_sfx_on = on
+		if sfx != null:
+			sfx.enabled = on)
+	hud.music_toggled.connect(func(on: bool):
+		_music_on = on
+		_apply_theme_audio())
+	hud.prefs_changed.connect(_save_prefs)
+	# 套用上次保存的设定
+	if not _saved_prefs.is_empty():
+		var p := _saved_prefs.duplicate()
+		if _cli_theme:
+			p.erase("theme")
+		if _cli_cells:
+			p.erase("cells")
+		hud.apply_prefs(p)
+
+
+# ---------------------------------------------------------------- 本地设定持久化
+
+const SAVE_PATH := "user://settings.cfg"
+
+
+func _load_prefs() -> Dictionary:
+	var cf := ConfigFile.new()
+	if cf.load(SAVE_PATH) != OK:
+		return {}
+	var p := {
+		"mode": cf.get_value("game", "mode", 0),
+		"level": cf.get_value("game", "level", 1),
+		"theme": cf.get_value("game", "theme", theme_id),
+		"cells": cf.get_value("game", "cells", board_cells),
+		"styles": cf.get_value("game", "styles", char_styles),
+		"sound": cf.get_value("game", "sound", true),
+		"music": cf.get_value("game", "music", true),
+		"pick_visible": cf.get_value("game", "pick_visible", true),
+		"items_open": cf.get_value("game", "items_open", true),
+	}
+	# 开局前就要用到的字段（主题、棋盘、角色）先落到内存
+	if not _cli_theme and THEME_LABELS.has(String(p["theme"])):
+		theme_id = String(p["theme"])
+	if not _cli_cells:
+		board_cells = clampi(int(p["cells"]), 40, 64)
+	if p["styles"] is Array and p["styles"].size() == 4:
+		var st: Array = []
+		for s in p["styles"]:
+			st.append(clampi(int(s), 0, 7))
+		char_styles = st
+	_sfx_on = bool(p["sound"])
+	_music_on = bool(p["music"])
+	return p
+
+
+func _save_prefs() -> void:
+	if hud == null:
+		return
+	var p: Dictionary = hud.prefs()
+	var cf := ConfigFile.new()
+	cf.set_value("game", "mode", p["mode"])
+	cf.set_value("game", "level", p["level"])
+	cf.set_value("game", "theme", p["theme"])
+	cf.set_value("game", "cells", p["cells"])
+	cf.set_value("game", "styles", p["styles"])
+	cf.set_value("game", "sound", p["sound"])
+	cf.set_value("game", "music", p["music"])
+	cf.set_value("game", "pick_visible", p["pick_visible"])
+	cf.set_value("game", "items_open", p["items_open"])
+	cf.save(SAVE_PATH)
 
 
 # ---------------------------------------------------------------- 对局管理
 
 func _start_match(mode: int, level: int, selected_theme: String, cells := 40, styles: Array = []) -> void:
+	Engine.time_scale = 1.0
 	game_mode = mode
 	ai_level = level
 	theme_id = selected_theme
@@ -626,14 +720,19 @@ func _resolve_capture(p: Dictionary) -> bool:
 			arena.remove_shield(q["node"])
 			_log("%s 的护盾挡下了攻击" % TEAM_NAMES[q["team"]])
 			arena.pulse(q["node"].position, Color("8fe6ff"))
+			arena.fx_sound("cap_block")
 			continue
 		var pos: Vector3 = q["node"].position
 		q["cell"] = -1
+		# 慢动作踩爆：整段过程把时间放慢，读得清跳跃与压扁（音效由 capture_stomp 内部按阶段播放）
+		Engine.time_scale = 0.45
+		await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]])
+		Engine.time_scale = 1.0
 		q["node"].position = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
-		arena.capture_blast(pos, TEAM_COLORS[q["team"]])
-		arena.piece_celebrate(p["node"])
-		hud.screen_flash(TEAM_COLORS[p["team"]], 0.30)
-		_shake(0.34, 20.0)
+		q["node"].scale = Vector3.ONE
+		q["node"].visible = true
+		hud.screen_flash(TEAM_COLORS[p["team"]], 0.26)
+		_shake(0.30, 18.0)
 		captures[p["team"]] += 1
 		_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
 		# 吃子奖励：抽一张道具卡
@@ -655,7 +754,7 @@ func _advance(p: Dictionary, steps: int) -> bool:
 				break
 			p["cell"] += 1
 			await _hop_to(p, _piece_cell_pos(p))
-	var captured := _resolve_capture(p)
+	var captured: bool = await _resolve_capture(p)
 	arena.pulse(_piece_cell_pos(p), TEAM_COLORS[p["team"]])
 	if p["cell"] == FIELDS - 1:
 		await _finish_piece(p)
@@ -1373,7 +1472,6 @@ func _apply_card(idx: int) -> void:
 		"shield":
 			p["shield"] = true
 			arena.add_shield(p["node"])
-			arena.flash_piece(p["node"])
 			arena.item_cast(p["node"], Color("6cc6ff"), "shield")
 			hud.show_item_toast("使用「护盾」", ITEM_DESC.get("shield", ""), Color("6cc6ff"))
 			hud.screen_flash(Color("6cc6ff"), 0.2)
@@ -1543,7 +1641,7 @@ func _apply_card(idx: int) -> void:
 				_shake(0.45, 26.0)
 				_log("%s 用炸弹把 %s 的 %d 号棋子炸回基地" % [TEAM_NAMES[current_team],
 					TEAM_NAMES[p["team"]], p["idx"] + 1])
-			_play(sfx_boom)
+			arena.fx_sound("it_bomb")
 			_update_all()
 			_resume_after_card()
 			return
@@ -1587,16 +1685,17 @@ func _trigger_event(p: Dictionary, forced := "", dramatic := false) -> void:
 		color = EVENT_COLORS[id]
 	var pos: Vector3 = p["node"].position
 	var pi := _ring_idx(p)
-	arena.event_ring(pos, color)
+	arena.event_fx(id, pos, color)
 	arena.item_aura(p["node"], color)
 	if dramatic:
-		arena.roulette_blast(Vector3(pos.x, BOARD_Y, pos.z), color)
-		hud.screen_flash(color, 0.55)
-		_shake(0.58, 32.0)
-		_play(sfx_boom)
+		arena.sky_sigil(Vector3(pos.x, BOARD_Y, pos.z), color)
+		hud.screen_flash(color, 0.42)
+		_shake(0.52, 26.0)
 	else:
-		hud.screen_flash(color, 0.18)
-		_play(sfx_event)
+		hud.screen_flash(color, 0.16)
+	# 重事件补一点镜头震动；音效由 event_fx 按事件类型各自播放
+	if not dramatic and id in ["meteor", "eruption", "earthquake", "voidrift", "ambush"]:
+		_shake(0.3, 14.0)
 	match id:
 		"treasure":
 			if _draw_card(team, true, Vector3(pos.x, BOARD_Y, pos.z)):
@@ -2194,7 +2293,7 @@ func _ai_cards() -> void:
 				bp["cell"] = -1
 				bp["node"].position = _pt_pos("HM%d_%d" % [bp["team"] + 1, bp["idx"] + 1])
 				arena.piece_hit(bp["node"])
-			_play(sfx_boom)
+			arena.fx_sound("it_bomb")
 			hud.screen_flash(Color("ff6a3c"), 0.32)
 			_shake(0.4, 22.0)
 			_update_all()
@@ -2275,6 +2374,7 @@ func _ai_cards() -> void:
 			arena.add_shield(pc["node"])
 			arena.flash_piece(pc["node"])
 			arena.item_aura(pc["node"], Color("6cc6ff"))
+			arena.fx_sound("it_shield")
 			_log("%s 使用「护盾」" % TEAM_NAMES[t])
 			_play(click_player)
 			_update_all()
