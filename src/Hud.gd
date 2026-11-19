@@ -17,6 +17,20 @@ signal music_toggled(on: bool)
 signal prefs_changed
 signal roulette_done(index: int)
 signal roulette_tick
+signal home_create
+signal home_load
+signal home_settings
+signal home_lan
+signal save_pressed
+signal load_slot_pressed(slot: int)
+signal delete_slot_pressed(slot: int)
+signal save_slot_pressed(slot: int)
+signal duel_chosen(pick: int)
+signal duel_toggled(on: bool)
+signal lan_host_pressed(player_name: String)
+signal lan_join_pressed(ip: String, room: String)
+signal lan_leave_pressed
+signal lan_refresh_pressed
 
 const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
@@ -50,6 +64,10 @@ const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫",
 const BOARD_SIZES := [40, 52, 64]
 const BOARD_SIZE_NAMES := ["标准 · 40 格", "大型 · 52 格", "巨型 · 64 格"]
 const TEAMS_ROW_H := 60.0
+const CAST_TEAM_COLORS := [Color("e0503f"), Color("3d8ae0"), Color("3fb96a"), Color("e0a92f")]
+const SAVE_SLOTS_MAX := 19
+const DUEL_TEAM_NAMES := ["红队", "蓝队", "绿队", "黄队"]
+const DUEL_GESTURES := ["石头", "剪刀", "布"]
 
 var _root: Control
 var _log_panel: PanelContainer
@@ -82,7 +100,7 @@ var _items_panel: PanelContainer
 var _items_handle: Button
 var _items_tween: Tween
 var _items_open := true
-var _items_w := 356.0
+var _items_w := 320.0
 var _items_edge := -34.0
 var _pick_panel: PanelContainer
 var _pick_box: VBoxContainer
@@ -119,6 +137,14 @@ var _toast: PanelContainer
 var _toast_title: Label
 var _toast_desc: Label
 var _toast_tween: Tween
+var _cast_bar: PanelContainer
+var _cast_chip: ColorRect
+var _cast_left: Label
+var _cast_right: Label
+var _cast_effect: Label
+var _cast_tween: Tween
+var _cast_base_top := 32.0
+var _cast_base_bottom := 88.0
 var _flash: ColorRect
 var _gesture: Label
 var _turn_text := "准备开始"
@@ -133,6 +159,41 @@ var _level_buttons: Array = []
 var _start_theme_buttons: Array = []
 var _safe := Vector4.ZERO
 var _game_nodes: Array = []
+var _home_overlay: Control
+var _load_overlay: Control
+var _saves_box: VBoxContainer
+var _load_hint: Label
+var _settings_overlay: Control
+var _s_sound_button: Button
+var _s_music_button: Button
+var _s_pick_button: Button
+var _s_items_button: Button
+var _lan_overlay: Control
+var _lan_status: Label
+var _lan_rooms_box: VBoxContainer
+var _lan_host_info: Label
+var _lan_host_btn: Button
+var _lan_leave_btn: Button
+var _lan_ip_edit: LineEdit
+var _lan_room_edit: LineEdit
+var _save_overlay: Control
+var _save_box: VBoxContainer
+var _save_hint: Label
+var _save_confirm_slot := -1
+var _save_confirm_until := 0
+var _save_confirm_btn: Button = null
+var _s_duel_button: Button = null
+var _duel_on := false
+var _duel_overlay: Control
+var _duel_title: Label
+var _duel_sub: Label
+var _duel_result: Label
+var _duel_bar: ProgressBar
+var _duel_buttons: Array = []
+var _duel_token := 0
+var _duel_locked := true
+var _duel_pick_value := -1
+var _duel_tween: Tween
 
 
 func _ready() -> void:
@@ -153,10 +214,17 @@ func _ready() -> void:
 	_build_pick()
 	_build_roulette()
 	_build_toast()
+	_build_cast_bar()
 	_build_event()
 	_build_gesture()
 	_build_start()
 	_build_win()
+	_build_duel()
+	_build_home()
+	_build_load()
+	_build_save()
+	_build_settings()
+	_build_lan()
 
 
 # ---------------------------------------------------------------- 基础样式
@@ -332,6 +400,12 @@ func _build_menu() -> void:
 	close.pressed.connect(_toggle_menu)
 	vb.add_child(close)
 
+	var save_btn := _btn("保存进度", Vector2(0, 36), 14)
+	save_btn.pressed.connect(func():
+		_toggle_menu()
+		save_pressed.emit())
+	vb.add_child(save_btn)
+
 	var restart := _btn("重新开始", Vector2(0, 36), 14)
 	restart.pressed.connect(func():
 		_toggle_menu()
@@ -380,16 +454,14 @@ func _toggle_menu() -> void:
 
 
 func _toggle_sound() -> void:
-	_sound_on = not _sound_on
-	_sound_button.text = "音效：开" if _sound_on else "音效：关"
+	set_sound(not _sound_on)
 	sound_toggled.emit(_sound_on)
 	if not _applying_prefs:
 		prefs_changed.emit()
 
 
 func _toggle_music() -> void:
-	_music_on = not _music_on
-	_music_button.text = "主题音乐：开" if _music_on else "主题音乐：关"
+	set_music(not _music_on)
 	music_toggled.emit(_music_on)
 	if not _applying_prefs:
 		prefs_changed.emit()
@@ -398,12 +470,27 @@ func _toggle_music() -> void:
 func _toggle_pick_visible() -> void:
 	_pick_visible = not _pick_visible
 	_pick_toggle.text = "走子列表：开" if _pick_visible else "走子列表：关"
+	if _s_pick_button != null:
+		_s_pick_button.text = _pick_toggle.text
 	if not _pick_visible:
 		_pick_panel.visible = false
 	elif not _last_options.is_empty():
 		_pick_panel.visible = true
 	if not _applying_prefs:
 		prefs_changed.emit()
+
+
+func _toggle_duel() -> void:
+	_duel_on = not _duel_on
+	_paint_duel_button()
+	duel_toggled.emit(_duel_on)
+	if not _applying_prefs:
+		prefs_changed.emit()
+
+
+func _paint_duel_button() -> void:
+	if _s_duel_button != null:
+		_s_duel_button.text = "吃棋对决：开" if _duel_on else "吃棋对决：关"
 
 
 func _pick_theme(id: String) -> void:
@@ -718,6 +805,8 @@ func _toggle_items() -> void:
 func set_items_open(open: bool, animate := true) -> void:
 	_items_open = open
 	_apply_items_position(animate)
+	if _s_items_button != null:
+		_s_items_button.text = "道具面板：开" if open else "道具面板：关"
 	if not _applying_prefs:
 		prefs_changed.emit()
 
@@ -938,6 +1027,57 @@ func _build_toast() -> void:
 	vb.add_child(_toast_desc)
 
 
+## 道具施放条：顶部居中、队伍状态栏下方，左侧队伍色块 + 施法者，右侧目标，第二行结果
+func _build_cast_bar() -> void:
+	_cast_base_top = 32.0 + _safe.y
+	_cast_base_bottom = _cast_base_top + 56.0
+	_cast_bar = PanelContainer.new()
+	_cast_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_cast_bar.offset_left = -300.0
+	_cast_bar.offset_right = 300.0
+	_cast_bar.offset_top = _cast_base_top
+	_cast_bar.offset_bottom = _cast_base_bottom
+	_cast_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cast_bar.modulate.a = 0.0
+	_cast_bar.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.92), 14, GOLD, 2))
+	_root.add_child(_cast_bar)
+	_game_nodes.append(_cast_bar)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 1)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cast_bar.add_child(vb)
+
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(hb)
+
+	_cast_chip = ColorRect.new()
+	_cast_chip.custom_minimum_size = Vector2(6, 28)
+	_cast_chip.color = CAST_TEAM_COLORS[0]
+	_cast_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(_cast_chip)
+
+	_cast_left = _label("", 16, Color(1, 1, 1, 0.96))
+	_cast_left.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(_cast_left)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(spacer)
+
+	_cast_right = _label("", 14, Color(0.86, 0.92, 1.0, 0.92))
+	_cast_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_cast_right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(_cast_right)
+
+	_cast_effect = _label("", 13, GOLD)
+	_cast_effect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(_cast_effect)
+
+
 func _build_event() -> void:
 	_event_overlay = Control.new()
 	_event_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -981,6 +1121,149 @@ func _build_gesture() -> void:
 	tw.tween_property(_gesture, "modulate:a", 0.0, 1.2)
 
 
+# ---------------------------------------------------------------- 吃棋对决
+
+func _build_duel() -> void:
+	_duel_overlay = Control.new()
+	_duel_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_duel_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_duel_overlay.visible = false
+	_root.add_child(_duel_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.01, 0.015, 0.03, 0.55)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_duel_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_duel_overlay.add_child(center)
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.97), 24, GOLD, 3))
+	card.custom_minimum_size = Vector2(560, 0)
+	center.add_child(card)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	card.add_child(vb)
+
+	_duel_title = _label("吃 棋 对 决", 32, GOLD)
+	_duel_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_duel_title)
+
+	_duel_sub = _label("红队 → 蓝队 1号", 16, TEXT)
+	_duel_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_duel_sub)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_child(row)
+	for i in DUEL_GESTURES.size():
+		var b := _btn(DUEL_GESTURES[i], Vector2(150, 104), 24)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var pick := i
+		b.pressed.connect(func(): _choose_duel(pick))
+		row.add_child(b)
+		_duel_buttons.append(b)
+
+	_duel_result = _label("选择你的出拳", 15, Color(1, 1, 1, 0.85))
+	_duel_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_duel_result)
+
+	_duel_bar = ProgressBar.new()
+	_duel_bar.min_value = 0.0
+	_duel_bar.max_value = 1.0
+	_duel_bar.value = 1.0
+	_duel_bar.show_percentage = false
+	_duel_bar.custom_minimum_size = Vector2(0, 8)
+	_duel_bar.add_theme_stylebox_override("background", _flat(Color(1, 1, 1, 0.08), 4))
+	_duel_bar.add_theme_stylebox_override("fill", _flat(Color("f0cd8a"), 4))
+	vb.add_child(_duel_bar)
+
+
+## 弹出对决面板：attacker/target_team 为队伍下标，target_idx 为 0 基棋子序号
+func show_duel(attacker: int, target_team: int, target_idx: int, seconds: float) -> void:
+	_duel_token += 1
+	var token := _duel_token
+	_duel_locked = false
+	_duel_pick_value = -1
+	for b in _duel_buttons:
+		b.disabled = false
+	_duel_result.text = "选择你的出拳"
+	_duel_result.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	_duel_sub.text = "%s → %s %s号" % [
+		DUEL_TEAM_NAMES[clampi(attacker, 0, 3)],
+		DUEL_TEAM_NAMES[clampi(target_team, 0, 3)],
+		str(clampi(target_idx, 0, 3) + 1)]
+	_duel_overlay.visible = true
+	if _duel_tween and _duel_tween.is_valid():
+		_duel_tween.kill()
+	_duel_bar.value = 1.0
+	_duel_tween = create_tween()
+	_duel_tween.tween_property(_duel_bar, "value", 0.0, maxf(seconds, 1.0))
+	_duel_tween.tween_callback(func():
+		if token == _duel_token and not _duel_locked:
+			_commit_duel(randi() % DUEL_GESTURES.size()))
+
+
+func hide_duel() -> void:
+	_duel_token += 1
+	_duel_locked = true
+	if _duel_tween and _duel_tween.is_valid():
+		_duel_tween.kill()
+	_duel_overlay.visible = false
+
+
+## 展示双方出拳结果，0.8 秒后自动收起
+func duel_result(atk_pick: int, def_pick: int, win: bool) -> void:
+	if not _duel_overlay.visible:
+		return
+	_duel_token += 1
+	var token := _duel_token
+	_duel_locked = true
+	for b in _duel_buttons:
+		b.disabled = true
+	if _duel_tween and _duel_tween.is_valid():
+		_duel_tween.kill()
+	_duel_result.text = "你出 %s · 对方出 %s · %s" % [
+		DUEL_GESTURES[clampi(atk_pick, 0, 2)],
+		DUEL_GESTURES[clampi(def_pick, 0, 2)],
+		"胜利" if win else "失败"]
+	_duel_result.add_theme_color_override("font_color", Color("8ff0c0") if win else Color("ff8f8f"))
+	await get_tree().create_timer(0.8).timeout
+	if token == _duel_token:
+		hide_duel()
+
+
+func _choose_duel(pick: int) -> void:
+	if _duel_locked or not _duel_overlay.visible:
+		return
+	_commit_duel(pick)
+
+
+func _commit_duel(pick: int) -> void:
+	if _duel_locked or not _duel_overlay.visible:
+		return
+	_duel_locked = true
+	_duel_pick_value = clampi(pick, 0, 2)
+	for b in _duel_buttons:
+		b.disabled = true
+	if _duel_tween and _duel_tween.is_valid():
+		_duel_tween.kill()
+	_duel_result.text = "你出 %s · 等待对方…" % DUEL_GESTURES[_duel_pick_value]
+	_duel_result.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	var token := _duel_token
+	duel_chosen.emit(_duel_pick_value)
+	# 兜底：调用方没有调用 duel_result 时，0.8 秒后自动收起（局域网客机场景）
+	await get_tree().create_timer(0.8).timeout
+	if token == _duel_token and _duel_overlay.visible:
+		hide_duel()
+
+
 # ---------------------------------------------------------------- 开始 / 结算
 
 func _build_start() -> void:
@@ -995,23 +1278,37 @@ func _build_start() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_start_overlay.add_child(dim)
 
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.offset_left = 12
+	scroll.offset_right = -12
+	scroll.offset_top = 64
+	scroll.offset_bottom = -12
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_start_overlay.add_child(scroll)
+
 	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_start_overlay.add_child(center)
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(center)
 
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.96), 24, Color(1, 1, 1, 0.1)))
 	card.custom_minimum_size = Vector2(660, 0)
 	center.add_child(card)
 
+	var back := _btn("‹ 返回", Vector2(104, 40), 15)
+	back.position = Vector2(24.0 + _safe.x, 14.0 + _safe.y)
+	back.pressed.connect(show_home)
+	_start_overlay.add_child(back)
+
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
 	card.add_child(vb)
 
-	var ttl := _label("骑士飞行棋 3", 40, GOLD)
+	var ttl := _label("创建对局", 38, GOLD)
 	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ttl)
-	var sub := _label("KNIGHT'S GAMBIT · 2026 REMAKE", 11, Color(1, 1, 1, 0.45))
+	var sub := _label("骑士飞行棋 3 · 对局设置", 12, Color(1, 1, 1, 0.45))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
 	vb.add_child(_spacer(8))
@@ -1155,6 +1452,269 @@ func _build_win() -> void:
 	vb.add_child(home)
 
 
+# ---------------------------------------------------------------- 启动画面 / 载入 / 设置 / 联机
+
+func _page_base(alpha := 0.94) -> Array:
+	var overlay := Control.new()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.visible = false
+	_root.add_child(overlay)
+	var dim := ColorRect.new()
+	dim.color = Color(0.01, 0.015, 0.03, alpha)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(center)
+	return [overlay, center]
+
+
+func _page_card(center: CenterContainer, width: float) -> VBoxContainer:
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.97), 24, Color(1, 1, 1, 0.1)))
+	card.custom_minimum_size = Vector2(width, 0)
+	center.add_child(card)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	card.add_child(vb)
+	return vb
+
+
+func _page_head(vb: VBoxContainer, title: String, right_text := "", back_action := Callable()) -> Label:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	vb.add_child(row)
+	var back := _btn("‹ 返回", Vector2(104, 40), 15)
+	back.pressed.connect(back_action if back_action.is_valid() else show_home)
+	row.add_child(back)
+	var ttl := _label(title, 26, GOLD)
+	ttl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(ttl)
+	var tail := _label(right_text, 12, Color(1, 1, 1, 0.45))
+	tail.custom_minimum_size = Vector2(104, 0)
+	tail.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	tail.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(tail)
+	return tail
+
+
+func _build_home() -> void:
+	var pair := _page_base(0.72)
+	_home_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 560)
+
+	var ttl := _label("骑士飞行棋 3", 46, GOLD)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(ttl)
+	var sub := _label("KNIGHT'S GAMBIT · 局域网对战版", 12, Color(1, 1, 1, 0.45))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(sub)
+	vb.add_child(_spacer(18))
+
+	var entries := [
+		["创 建 对 局", true, func(): home_create.emit()],
+		["载 入 游 戏", false, func(): home_load.emit()],
+		["局 域 网 对 战", false, func(): home_lan.emit()],
+		["设 置", false, func(): home_settings.emit()],
+	]
+	for e in entries:
+		var b := _btn(e[0], Vector2(0, 62), 22)
+		if bool(e[1]):
+			b.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 14))
+			b.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
+			b.add_theme_stylebox_override("pressed", _btn_style(Color("b5863f"), Color("ffe0a0"), 14))
+			b.add_theme_color_override("font_color", Color("1a1206"))
+		b.pressed.connect(e[2])
+		vb.add_child(b)
+
+	vb.add_child(_spacer(10))
+	var foot := _label("存档上限 20 个 · 每回合自动存档 · 同一 Wi-Fi 下可局域网联机", 11, Color(1, 1, 1, 0.35))
+	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(foot)
+
+	_home_overlay.visible = true
+	for n in _game_nodes:
+		if is_instance_valid(n):
+			n.visible = false
+
+
+func _build_load() -> void:
+	var pair := _page_base()
+	_load_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 780)
+	_load_hint = _page_head(vb, "载 入 游 戏")
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 400)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
+	_saves_box = VBoxContainer.new()
+	_saves_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_saves_box.add_theme_constant_override("separation", 8)
+	scroll.add_child(_saves_box)
+
+	var tip := _label("自动存档每回合覆盖一次；手动存档在游戏中打开左上角控制台点击「保存进度」。", 12, Color(1, 1, 1, 0.4))
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(tip)
+
+
+## 存档槽选择页：只列 1..19 号手动槽，0 号自动槽不出现
+func _build_save() -> void:
+	var pair := _page_base()
+	_save_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 780)
+	_save_hint = _page_head(vb, "保 存 进 度", "", hide_save_slots)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 400)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
+	_save_box = VBoxContainer.new()
+	_save_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_save_box.add_theme_constant_override("separation", 8)
+	scroll.add_child(_save_box)
+
+	var tip := _label("0 号自动存档不会被覆盖，始终保留", 12, Color(1, 1, 1, 0.45))
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(tip)
+
+
+func _build_settings() -> void:
+	var pair := _page_base()
+	_settings_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 600)
+	_page_head(vb, "设 置")
+
+	_s_sound_button = _btn("音效：开", Vector2(0, 46), 16)
+	_s_sound_button.pressed.connect(_toggle_sound)
+	vb.add_child(_s_sound_button)
+	_s_music_button = _btn("主题音乐：开", Vector2(0, 46), 16)
+	_s_music_button.pressed.connect(_toggle_music)
+	vb.add_child(_s_music_button)
+	_s_pick_button = _btn("走子列表：开", Vector2(0, 46), 16)
+	_s_pick_button.pressed.connect(_toggle_pick_visible)
+	vb.add_child(_s_pick_button)
+	_s_items_button = _btn("道具面板：开", Vector2(0, 46), 16)
+	_s_items_button.pressed.connect(_toggle_items)
+	vb.add_child(_s_items_button)
+	_s_duel_button = _btn("吃棋对决：关", Vector2(0, 46), 16)
+	_s_duel_button.pressed.connect(_toggle_duel)
+	vb.add_child(_s_duel_button)
+	_paint_duel_button()
+	var duel_tip := _label("开启后吃棋前先玩一局，输或平则退回原位", 11, Color(1, 1, 1, 0.4))
+	duel_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(duel_tip)
+
+	vb.add_child(_spacer(4))
+	vb.add_child(_label("默认棋盘主题", 13, DIM))
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 6)
+	vb.add_child(grid)
+	for i in THEME_IDS.size():
+		var b := _btn(THEME_NAMES[i], Vector2(0, 40), 14)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var tid: String = THEME_IDS[i]
+		b.pressed.connect(func(): _pick_theme(tid))
+		grid.add_child(b)
+
+	var tip := _label("设置会立即保存，下次启动沿用。", 11, Color(1, 1, 1, 0.35))
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(tip)
+
+
+func _build_lan() -> void:
+	var pair := _page_base()
+	_lan_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 760)
+	_page_head(vb, "局 域 网 对 战", "同一 Wi-Fi")
+
+	var host_box := PanelContainer.new()
+	host_box.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.04), 14))
+	vb.add_child(host_box)
+	var hb := VBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	host_box.add_child(hb)
+	var hrow := HBoxContainer.new()
+	hrow.add_theme_constant_override("separation", 10)
+	hb.add_child(hrow)
+	var hlabel := _label("作为房主", 15, TEXT)
+	hlabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hrow.add_child(hlabel)
+	_lan_host_btn = _btn("创建房间", Vector2(130, 40), 16)
+	_lan_host_btn.pressed.connect(func(): lan_host_pressed.emit(""))
+	hrow.add_child(_lan_host_btn)
+	_lan_leave_btn = _btn("解散房间", Vector2(110, 40), 15)
+	_lan_leave_btn.visible = false
+	_lan_leave_btn.pressed.connect(func(): lan_leave_pressed.emit())
+	hrow.add_child(_lan_leave_btn)
+	_lan_host_info = _label("创建后房号会自动出现在对方房间列表里", 12, Color(1, 1, 1, 0.45))
+	hb.add_child(_lan_host_info)
+
+	vb.add_child(_spacer(2))
+	var jrow := HBoxContainer.new()
+	jrow.add_theme_constant_override("separation", 10)
+	vb.add_child(jrow)
+	var jlabel := _label("附近的房间", 15, TEXT)
+	jlabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	jrow.add_child(jlabel)
+	var refresh := _btn("刷新", Vector2(96, 40), 15)
+	refresh.pressed.connect(func(): lan_refresh_pressed.emit())
+	jrow.add_child(refresh)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 190)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
+	_lan_rooms_box = VBoxContainer.new()
+	_lan_rooms_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lan_rooms_box.add_theme_constant_override("separation", 6)
+	scroll.add_child(_lan_rooms_box)
+
+	var mrow := HBoxContainer.new()
+	mrow.add_theme_constant_override("separation", 8)
+	vb.add_child(mrow)
+	_lan_ip_edit = LineEdit.new()
+	_lan_ip_edit.placeholder_text = "房主 IP（可留空）"
+	_lan_ip_edit.custom_minimum_size = Vector2(0, 42)
+	_lan_ip_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lan_ip_edit.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.12), 10))
+	_lan_ip_edit.add_theme_color_override("font_color", TEXT)
+	_lan_ip_edit.add_theme_color_override("caret_color", GOLD)
+	mrow.add_child(_lan_ip_edit)
+	_lan_room_edit = LineEdit.new()
+	_lan_room_edit.placeholder_text = "房号"
+	_lan_room_edit.custom_minimum_size = Vector2(120, 42)
+	_lan_room_edit.max_length = 4
+	_lan_room_edit.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.12), 10))
+	_lan_room_edit.add_theme_color_override("font_color", TEXT)
+	_lan_room_edit.add_theme_color_override("caret_color", GOLD)
+	mrow.add_child(_lan_room_edit)
+	var join := _btn("加入", Vector2(100, 42), 16)
+	join.pressed.connect(_lan_join_clicked)
+	mrow.add_child(join)
+
+	_lan_status = _label("", 12, Color(1, 1, 1, 0.55))
+	_lan_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_lan_status)
+	_lan_rooms_box.add_child(_label("正在搜索附近房间…", 12, Color(1, 1, 1, 0.4)))
+
+
+func _lan_join_clicked() -> void:
+	var ip := _lan_ip_edit.text.strip_edges()
+	var room := _lan_room_edit.text.strip_edges()
+	lan_join_pressed.emit(ip, room)
+
+
 func _select_mode(i: int) -> void:
 	_mode = i
 	_paint_choice(_mode_buttons, i)
@@ -1240,25 +1800,276 @@ func _start_clicked() -> void:
 
 # ---------------------------------------------------------------- 对外接口
 
-func show_start() -> void:
-	_start_overlay.visible = true
-	_menu_panel.visible = false
-	_menu_open = false
-	_menu_button.text = "≡"
+func _hide_pages() -> void:
+	_start_overlay.visible = false
+	_home_overlay.visible = false
+	_load_overlay.visible = false
+	_save_overlay.visible = false
+	_settings_overlay.visible = false
+	_lan_overlay.visible = false
+	_duel_overlay.visible = false
+
+
+func _hide_game_nodes() -> void:
 	for n in _game_nodes:
 		if is_instance_valid(n):
 			n.visible = false
+
+
+func _show_game_nodes() -> void:
+	for n in _game_nodes:
+		if is_instance_valid(n):
+			n.visible = true
+
+
+func show_home() -> void:
+	_hide_pages()
+	_hide_game_nodes()
+	_home_overlay.visible = true
 	_toast.modulate.a = 0.0
+	if _cast_bar != null:
+		_cast_bar.modulate.a = 0.0
 	hide_win()
 	hide_pick()
 	hide_roulette()
 
 
+func show_start() -> void:
+	_hide_pages()
+	_start_overlay.visible = true
+	_menu_panel.visible = false
+	_menu_open = false
+	_menu_button.text = "≡"
+	_hide_game_nodes()
+	_toast.modulate.a = 0.0
+	if _cast_bar != null:
+		_cast_bar.modulate.a = 0.0
+	hide_win()
+	hide_pick()
+	hide_roulette()
+
+
+func show_load(records: Array) -> void:
+	_hide_pages()
+	_load_overlay.visible = true
+	_hide_game_nodes()
+	for c in _saves_box.get_children():
+		c.queue_free()
+	_load_hint.text = "%d / 20" % records.size()
+	if records.is_empty():
+		_saves_box.add_child(_label("还没有存档，先创建一局开始游戏吧。", 14, Color(1, 1, 1, 0.45)))
+		return
+	for rec in records:
+		_saves_box.add_child(_make_save_row(rec))
+
+
+func _make_save_row(rec: Dictionary) -> PanelContainer:
+	var slot := int(rec.get("slot", 0))
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.045), 12))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	panel.add_child(row)
+
+	var tag := _label("自动" if slot == 0 else "%02d" % slot, 14, GOLD if slot == 0 else DIM)
+	tag.custom_minimum_size = Vector2(46, 0)
+	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(tag)
+
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 2)
+	row.add_child(info)
+	info.add_child(_label(String(rec.get("title", "存档")), 15, TEXT))
+	info.add_child(_label(String(rec.get("detail", "")), 11, Color(1, 1, 1, 0.45)))
+	info.add_child(_label(String(rec.get("time_text", "")), 11, Color(1, 1, 1, 0.3)))
+
+	var load := _btn("载入", Vector2(88, 40), 15)
+	load.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 12))
+	load.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 12))
+	load.add_theme_color_override("font_color", Color("1a1206"))
+	load.pressed.connect(func(): load_slot_pressed.emit(slot))
+	row.add_child(load)
+	if slot != 0:
+		var del := _btn("删除", Vector2(72, 40), 14)
+		del.add_theme_stylebox_override("normal", _btn_style(Color(0.45, 0.16, 0.18, 0.55), Color(1, 1, 1, 0.18), 12))
+		del.pressed.connect(func(): delete_slot_pressed.emit(slot))
+		row.add_child(del)
+	return panel
+
+
+func show_settings() -> void:
+	_hide_pages()
+	_settings_overlay.visible = true
+	_hide_game_nodes()
+
+
+## 打开存档槽选择页：records 来自 Main._save_records()
+func show_save_slots(records: Array) -> void:
+	_hide_pages()
+	_save_overlay.visible = true
+	_hide_game_nodes()
+	_reset_save_confirm()
+	for c in _save_box.get_children():
+		c.queue_free()
+	var by_slot := {}
+	for rec in records:
+		if rec is Dictionary:
+			var s := int(rec.get("slot", 0))
+			if s >= 1 and s <= SAVE_SLOTS_MAX:
+				by_slot[s] = rec
+	_save_hint.text = "%d / %d" % [by_slot.size(), SAVE_SLOTS_MAX]
+	for slot in range(1, SAVE_SLOTS_MAX + 1):
+		_save_box.add_child(_make_save_slot_row(slot, by_slot.get(slot, {})))
+
+
+func hide_save_slots() -> void:
+	_save_overlay.visible = false
+	_reset_save_confirm()
+	_show_game_nodes()
+	# 回到对局：收起控制台与战报，避免 _show_game_nodes 把它们一起点亮
+	_menu_panel.visible = false
+	_menu_open = false
+	_menu_button.text = "≡"
+	_log_panel.visible = false
+	_log_button.text = "战 报 ▾"
+
+
+## 载入页正在显示时刷新数据；未打开则什么都不做
+func refresh_load(records: Array) -> void:
+	if _load_overlay != null and _load_overlay.visible:
+		show_load(records)
+
+
+func _make_save_slot_row(slot: int, rec: Dictionary) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.045), 12))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	panel.add_child(row)
+
+	var tag := _label("【%02d】" % slot, 14, GOLD)
+	tag.custom_minimum_size = Vector2(52, 0)
+	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(tag)
+
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 2)
+	row.add_child(info)
+	if rec.is_empty():
+		info.add_child(_label("空槽 · 保存到此槽", 15, Color(1, 1, 1, 0.45)))
+	else:
+		info.add_child(_label(String(rec.get("detail", "存档")), 14, TEXT))
+		info.add_child(_label(String(rec.get("time_text", "")), 11, Color(1, 1, 1, 0.35)))
+
+	var b := _btn("保存到此槽" if rec.is_empty() else "覆盖", Vector2(118, 40), 14)
+	if rec.is_empty():
+		b.pressed.connect(func():
+			_reset_save_confirm()
+			save_slot_pressed.emit(slot))
+	else:
+		b.add_theme_stylebox_override("normal", _btn_style(Color(0.45, 0.16, 0.18, 0.55), Color(1, 1, 1, 0.18), 12))
+		b.pressed.connect(func(): _confirm_save_slot(slot, b))
+	row.add_child(b)
+	return panel
+
+
+## 已占用槽：第一次点变「确认覆盖?」，2.5 秒内再点才真正保存
+func _confirm_save_slot(slot: int, b: Button) -> void:
+	if _save_confirm_slot == slot and Time.get_ticks_msec() <= _save_confirm_until:
+		_reset_save_confirm()
+		save_slot_pressed.emit(slot)
+		return
+	_reset_save_confirm()
+	_save_confirm_slot = slot
+	_save_confirm_btn = b
+	_save_confirm_until = Time.get_ticks_msec() + 2500
+	b.text = "确认覆盖?"
+	var token := _save_confirm_until
+	await get_tree().create_timer(2.5).timeout
+	if _save_confirm_slot == slot and _save_confirm_until == token:
+		_reset_save_confirm()
+
+
+func _reset_save_confirm() -> void:
+	if _save_confirm_btn != null and is_instance_valid(_save_confirm_btn):
+		_save_confirm_btn.text = "覆盖"
+	_save_confirm_btn = null
+	_save_confirm_slot = -1
+	_save_confirm_until = 0
+
+
+## 点别处时取消「确认覆盖?」
+func _input(event: InputEvent) -> void:
+	if _save_confirm_slot < 0 or _save_overlay == null or not _save_overlay.visible:
+		return
+	var pos := Vector2.ZERO
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		pos = event.position
+	elif event is InputEventScreenTouch and event.pressed:
+		pos = event.position
+	else:
+		return
+	if _save_confirm_btn != null and is_instance_valid(_save_confirm_btn) \
+			and _save_confirm_btn.get_global_rect().has_point(pos):
+		return
+	_reset_save_confirm()
+
+
+func show_lan() -> void:
+	_hide_pages()
+	_lan_overlay.visible = true
+	_hide_game_nodes()
+
+
+func set_lan_status(text: String, color := Color(1, 1, 1, 0.55)) -> void:
+	_lan_status.text = text
+	_lan_status.add_theme_color_override("font_color", color)
+
+
+func set_lan_rooms(rooms: Array) -> void:
+	for c in _lan_rooms_box.get_children():
+		c.queue_free()
+	if rooms.is_empty():
+		_lan_rooms_box.add_child(_label("还没有发现房间。确认两台设备在同一 Wi-Fi，或直接填房主 IP 加入。", 12, Color(1, 1, 1, 0.4)))
+		return
+	for r in rooms:
+		var panel := PanelContainer.new()
+		panel.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.045), 12))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		panel.add_child(row)
+		var info := VBoxContainer.new()
+		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info.add_theme_constant_override("separation", 1)
+		row.add_child(info)
+		var host_name := String(r.get("host", ""))
+		info.add_child(_label("房号 %s%s" % [String(r.get("room", "")), " · " + host_name if host_name != "" else ""], 14, TEXT))
+		info.add_child(_label("%s · %d/2 人 · %d 格棋盘" % [String(r.get("ip", "")), int(r.get("players", 1)), int(r.get("cells", 40))], 11, Color(1, 1, 1, 0.42)))
+		var join := _btn("加入", Vector2(88, 38), 15)
+		var ip := String(r.get("ip", ""))
+		var room := String(r.get("room", ""))
+		join.pressed.connect(func(): lan_join_pressed.emit(ip, room))
+		row.add_child(join)
+		_lan_rooms_box.add_child(panel)
+
+
+func set_lan_hosting(text: String) -> void:
+	_lan_host_info.text = text
+	_lan_host_btn.disabled = true
+	_lan_leave_btn.visible = true
+
+
+func set_lan_idle() -> void:
+	_lan_host_info.text = "创建后房号会自动出现在对方房间列表里"
+	_lan_host_btn.disabled = false
+	_lan_leave_btn.visible = false
+
+
 func hide_start() -> void:
-	_start_overlay.visible = false
-	for n in _game_nodes:
-		if is_instance_valid(n):
-			n.visible = true
+	_hide_pages()
+	_show_game_nodes()
 	_set_teams_open(false, false)
 	_menu_panel.visible = false
 	_menu_open = false
@@ -1270,11 +2081,15 @@ func hide_start() -> void:
 func set_sound(on: bool) -> void:
 	_sound_on = on
 	_sound_button.text = "音效：开" if on else "音效：关"
+	if _s_sound_button != null:
+		_s_sound_button.text = _sound_button.text
 
 
 func set_music(on: bool) -> void:
 	_music_on = on
 	_music_button.text = "主题音乐：开" if on else "主题音乐：关"
+	if _s_music_button != null:
+		_s_music_button.text = _music_button.text
 
 
 ## 当前所有可持久化的设定
@@ -1289,6 +2104,7 @@ func prefs() -> Dictionary:
 		"music": _music_on,
 		"pick_visible": _pick_visible,
 		"items_open": _items_open,
+		"duel": _duel_on,
 	}
 
 
@@ -1322,6 +2138,9 @@ func apply_prefs(p: Dictionary) -> void:
 	if p.has("items_open"):
 		_items_open = bool(p["items_open"])
 		_apply_items_position(false)
+	if p.has("duel"):
+		_duel_on = bool(p["duel"])
+		_paint_duel_button()
 	_applying_prefs = false
 
 
@@ -1461,6 +2280,39 @@ func show_item_toast(title: String, desc: String, color: Color) -> void:
 	_toast_tween.set_parallel(true)
 	_toast_tween.tween_property(_toast, "modulate:a", 0.0, 0.30)
 	_toast_tween.tween_property(_toast, "scale", Vector2(1.06, 1.06), 0.30)
+
+
+## 道具施放信息条：顶部滑入 → 停留 → 淡出；只做动画的补充说明，不拦输入
+func show_item_cast(team: int, item_id: String, target_text: String, effect_text: String) -> void:
+	if _cast_bar == null:
+		return
+	var info: Array = ITEM_INFO.get(item_id, [item_id, "", Color("d8d8e8")])
+	var accent: Color = info[2]
+	var team_color: Color = CAST_TEAM_COLORS[clampi(team, 0, 3)]
+	var team_name: String = DUEL_TEAM_NAMES[clampi(team, 0, 3)]
+	_cast_left.text = "%s  使用了  %s" % [team_name, String(info[0])]
+	_cast_right.text = target_text
+	_cast_effect.text = effect_text
+	_cast_effect.add_theme_color_override("font_color", accent.lightened(0.15))
+	_cast_chip.color = team_color
+	_cast_bar.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.92), 14, team_color, 2))
+	_cast_bar.visible = true
+	if _cast_tween and _cast_tween.is_valid():
+		_cast_tween.kill()
+	_cast_bar.modulate.a = 0.0
+	_cast_bar.offset_top = _cast_base_top - 16.0
+	_cast_bar.offset_bottom = _cast_base_bottom - 16.0
+	_cast_tween = create_tween()
+	_cast_tween.set_parallel(true)
+	_cast_tween.tween_property(_cast_bar, "modulate:a", 1.0, 0.2)
+	_cast_tween.tween_property(_cast_bar, "offset_top", _cast_base_top, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_cast_tween.tween_property(_cast_bar, "offset_bottom", _cast_base_bottom, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_cast_tween.set_parallel(false)
+	_cast_tween.tween_interval(1.4)
+	_cast_tween.set_parallel(true)
+	_cast_tween.tween_property(_cast_bar, "modulate:a", 0.0, 0.3)
+	_cast_tween.tween_property(_cast_bar, "offset_top", _cast_base_top - 10.0, 0.3)
+	_cast_tween.tween_property(_cast_bar, "offset_bottom", _cast_base_bottom - 10.0, 0.3)
 
 
 func screen_flash(color: Color, strength := 0.32) -> void:

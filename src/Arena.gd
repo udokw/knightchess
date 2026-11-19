@@ -301,6 +301,9 @@ func _process(delta: float) -> void:
 	for a in _actors:
 		if not is_instance_valid(a["body"]):
 			continue
+		# 道具演出期间由 tween 接管身体姿态，待机摆动让位，避免逐帧覆盖
+		if int(a.get("anim", 0)) > 0:
+			continue
 		var body: Node3D = a["body"]
 		var ph: float = a["phase"]
 		var style_i := int(a["style"])
@@ -2085,64 +2088,853 @@ func piece_celebrate(node: Node3D) -> void:
 	t.chain().tween_property(body, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_BACK)
 
 
-## 吃棋：慢动作腾空跃起，砸落时把对手压扁踩爆
+## 吃棋：蓄力 → 跃起 → 滞空 → 砸落 → 踩扁 → 溅开 → 收势（七阶段，tween 合计约 1.72s）
 func capture_stomp(attacker: Node3D, victim: Node3D, color: Color) -> void:
 	if attacker == null or not is_instance_valid(attacker):
 		return
 	var a := _actor_of(attacker)
 	var body: Node3D = a.get("body", null) if not a.is_empty() else null
+	var has_victim := victim != null and is_instance_valid(victim)
 	var start := attacker.position
 	var vpos := start
-	if victim != null and is_instance_valid(victim):
+	if has_victim:
 		vpos = victim.position
 	var flat := Vector2(vpos.x - start.x, vpos.z - start.z)
 	if flat.length() > 1.0:
 		attacker.rotation.y = atan2(vpos.x - start.x, vpos.z - start.z)
-	# 1. 下蹲蓄力
+	# 受害者身体：能从 _actor_of 取到就抖身体，取不到就抖根节点
+	var vbody: Node3D = null
+	if has_victim:
+		var va := _actor_of(victim)
+		if not va.is_empty():
+			vbody = va["body"]
+	var vshake: Node3D = vbody if vbody != null else victim
+	# 1. 蓄力 0.20s：攻击方下蹲，目标方原地发抖
+	if has_victim and is_instance_valid(vshake):
+		var tremble := create_tween()
+		tremble.tween_property(vshake, "rotation:y", 0.16, 0.05)
+		tremble.tween_property(vshake, "rotation:y", -0.14, 0.06)
+		tremble.tween_property(vshake, "rotation:y", 0.10, 0.05)
+		tremble.tween_property(vshake, "rotation:y", 0.0, 0.04)
 	if body != null:
 		var crouch := create_tween()
 		crouch.set_parallel(true)
-		crouch.tween_property(body, "position:y", -11.0, 0.18).set_trans(Tween.TRANS_QUAD)
-		crouch.tween_property(body, "scale", Vector3(1.14, 0.84, 1.14), 0.18)
+		crouch.tween_property(body, "position:y", -11.0, 0.20).set_trans(Tween.TRANS_QUAD)
+		crouch.tween_property(body, "scale", Vector3(1.14, 0.84, 1.14), 0.20)
 		await crouch.finished
-	# 2. 高高跃起，越过对手头顶
+	else:
+		await get_tree().create_timer(0.20).timeout
+	# 2. 跃起 0.36s：沿抛物线飞到目标正上方，身体拉长并自旋半圈
 	fx_sound("cap_jump")
-	var apex := Vector3(vpos.x, start.y + 205.0, vpos.z)
+	var apex := Vector3(vpos.x, start.y + 200.0, vpos.z)
 	var jump := create_tween()
 	jump.set_parallel(true)
-	jump.tween_property(attacker, "position", apex, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	jump.tween_property(attacker, "position", apex, 0.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	jump.tween_property(attacker, "rotation:y", attacker.rotation.y + PI, 0.36)
 	if body != null:
-		jump.tween_property(body, "position:y", 0.0, 0.24)
-		jump.tween_property(body, "scale", Vector3(0.9, 1.18, 0.9), 0.24)
+		jump.tween_property(body, "position:y", 0.0, 0.20)
+		jump.tween_property(body, "scale", Vector3(0.92, 1.18, 0.92), 0.20)
 	await jump.finished
-	# 3. 急坠砸下
+	# 3. 滞空 0.10s：顶点悬停不动，给“跃起”留辨识时间
+	var hover := create_tween()
+	hover.tween_interval(0.10)
+	await hover.finished
+	# 4. 砸落 0.16s：QUART 加速直坠，身体压扁
 	var fall := create_tween()
 	fall.set_parallel(true)
-	fall.tween_property(attacker, "position", Vector3(vpos.x, vpos.y, vpos.z), 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	fall.tween_property(attacker, "position", vpos, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
 	if body != null:
-		fall.tween_property(body, "scale", Vector3(1.24, 0.8, 1.24), 0.2)
+		fall.tween_property(body, "scale", Vector3(1.24, 0.80, 1.24), 0.16)
 	await fall.finished
-	# 4. 落地：压扁受害者 + 冲击波 + 碎屑
 	fx_sound("cap_slam")
 	impact(Vector3(vpos.x, TILE_TOP, vpos.z), color)
-	_shockwave(vpos, color, 0.0, 4.6, 0.5)
-	_fx_shards(Vector3(vpos.x, TILE_TOP + 2.0, vpos.z), color.lightened(0.2), 12, 70.0, 90.0, 6.0, 0.5)
-	if victim != null and is_instance_valid(victim):
-		var squash := create_tween()
-		squash.set_parallel(true)
-		squash.tween_property(victim, "scale", Vector3(1.55, 0.12, 1.55), 0.09)
-		squash.tween_property(victim, "position:y", vpos.y - 7.0, 0.09)
-		await squash.finished
-		fx_sound("cap_squash")
-		capture_blast(vpos, color)
-	if body != null:
-		var land := create_tween()
-		land.set_parallel(true)
-		land.tween_property(body, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		land.tween_property(body, "position:y", 0.0, 0.18)
-		await land.finished
+	# 5. 踩扁 0.10s：目标瞬间压成一张薄片
+	fx_sound("cap_squash")
+	var squash := create_tween()
+	squash.set_parallel(true)
+	squash.tween_interval(0.10)
+	if has_victim and is_instance_valid(victim):
+		squash.tween_property(victim, "scale", Vector3(1.55, 0.06, 1.55), 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		squash.tween_property(victim, "rotation", Vector3.ZERO, 0.10)
+	await squash.finished
+	# 6. 溅开 0.55s：一滩 + 两圈错开冲击波 + 碎屑 + 中心闪光（主流程等 0.50s 后收势）
+	puddle(vpos, color)
+	_shockwave(vpos, color, 0.0, 3.2, 0.55)
+	_shockwave(vpos, color.lightened(0.25), 0.06, 4.6, 0.55)
+	_fx_shards(Vector3(vpos.x, TILE_TOP + 2.0, vpos.z), color.lightened(0.2), 10, 70.0, 90.0, 6.0, 0.55)
+	capture_blast(vpos, color)
+	var splash := create_tween()
+	splash.tween_interval(0.50)
+	await splash.finished
+	# 7. 收势 0.30s：恢复站姿 + 胜利小跳
 	fx_sound("cap_win", -2.0)
+	if body != null:
+		var rise := create_tween()
+		rise.set_parallel(true)
+		rise.tween_property(body, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		rise.tween_property(body, "position:y", 0.0, 0.16)
+		await rise.finished
+	var hop := create_tween()
+	hop.tween_property(attacker, "position:y", vpos.y + 12.0, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	hop.tween_property(attacker, "position:y", vpos.y, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await hop.finished
 	piece_celebrate(attacker)
+	# 收尾：清掉受害者的薄片残留（位置与可见性由 Main 负责复位到基地）
+	if has_victim and is_instance_valid(victim):
+		victim.scale = Vector3.ONE
+		victim.rotation = Vector3.ZERO
+
+
+# ---------------------------------------------------------------- 道具演出原语
+# 全部围绕“施法动作 → 传递 → 受击反应 → 结果”四段设计：
+# 棋子本体真的抬手/后仰/前压/滑退/翻滚，粒子只做辅助。
+
+## 演出期间接管拟人待机动画：锁定后 _process 不再覆盖身体姿态，避免 tween 被待机摆动抵消
+func _anim_begin(node: Node3D) -> Dictionary:
+	var a := _actor_of(node)
+	if not a.is_empty():
+		a["anim"] = int(a.get("anim", 0)) + 1
+	return a
+
+
+func _anim_end(a: Dictionary, body: Node3D) -> void:
+	if body != null and is_instance_valid(body):
+		body.position.z = 0.0
+		body.rotation = Vector3.ZERO
+	if not a.is_empty():
+		a["anim"] = maxi(int(a.get("anim", 1)) - 1, 0)
+
+
+## 蓄力：重心后坐 + 身体后仰 + 脚下符文环 + 少量能量粒子
+func anim_windup(node: Node3D, color: Color, dur := 0.25) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var g := Vector3(node.position.x, TILE_TOP, node.position.z)
+	var s0 := node.scale
+	event_ring(g, color)
+	_fx_shards(g + Vector3(0, 2.0, 0), color, 5, 26.0, 52.0, 3.4, 0.42)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(node, "scale", Vector3(s0.x * 0.97, s0.y * 1.03, s0.z * 0.97), dur) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if body != null:
+		t.tween_property(body, "position:z", -8.0, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(body, "rotation:x", -0.18, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await t.finished
+	if is_instance_valid(node):
+		node.scale = s0
+	_anim_end(a, body)
+
+
+## 释放：上身猛前压 + 脚下炸开冲击波
+func anim_release(node: Node3D, color: Color, dur := 0.12) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var g := Vector3(node.position.x, TILE_TOP, node.position.z)
+	var s0 := node.scale
+	_shockwave(g, color, 0.0, 2.5, 0.42)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(node, "scale", Vector3(s0.x * 1.06, s0.y * 0.95, s0.z * 1.06), dur) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if body != null:
+		t.tween_property(body, "position:z", 10.0, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(body, "rotation:x", 0.22, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await t.finished
+	if is_instance_valid(node):
+		node.scale = s0
+	_anim_end(a, body)
+
+
+## 受击：先压扁 15%，再沿 dir 水平滑出并倾斜，最后回正
+func piece_recoil(node: Node3D, dir: Vector3, power := 1.0) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var start := node.position
+	var s0 := node.scale
+	var d := Vector3(dir.x, 0.0, dir.z)
+	if d.length() < 0.001:
+		d = Vector3.BACK
+	d = d.normalized()
+	var squash := create_tween()
+	squash.set_parallel(true)
+	squash.tween_property(node, "scale", Vector3(s0.x * 1.15, s0.y * 0.85, s0.z * 1.15), 0.08)
+	if body != null:
+		squash.tween_property(body, "rotation:x", 0.2, 0.08)
+	await squash.finished
+	var slide := create_tween()
+	slide.set_parallel(true)
+	slide.tween_property(node, "position", start + d * 20.0 * power, 0.14) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	slide.tween_property(node, "rotation:z", 0.16 * power, 0.14)
+	if body != null:
+		slide.tween_property(body, "rotation:x", -0.12, 0.14)
+	await slide.finished
+	var settle := create_tween()
+	settle.set_parallel(true)
+	settle.tween_property(node, "position", start, 0.08).set_trans(Tween.TRANS_SINE)
+	settle.tween_property(node, "scale", s0, 0.08)
+	settle.tween_property(node, "rotation:z", 0.0, 0.08)
+	if body != null:
+		settle.tween_property(body, "rotation:x", 0.0, 0.08)
+	await settle.finished
+	_anim_end(a, body)
+
+
+## 整枚棋子翻滚沿抛物线飞出，落地弹跳一次并扬起灰尘
+func piece_launch(node: Node3D, to: Vector3, height := 120.0) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var start := node.position
+	var ctrl := (start + to) * 0.5 + Vector3(0, height, 0)
+	var r0 := node.rotation
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_method(_launch_step.bind(node, start, ctrl, to), 0.0, 1.0, 0.58) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_property(node, "rotation:x", r0.x + TAU, 0.58)
+	if body != null:
+		t.tween_property(body, "scale", Vector3(0.9, 1.12, 0.9), 0.22)
+	await t.finished
+	if not is_instance_valid(node):
+		return
+	node.rotation = r0
+	if body != null and is_instance_valid(body):
+		body.scale = Vector3.ONE
+	_fx_shards(Vector3(to.x, TILE_TOP + 2.0, to.z), Color("d8cdb8"), 8, 44.0, 30.0, 4.0, 0.4)
+	var bounce := create_tween()
+	bounce.tween_property(node, "position:y", to.y + 16.0, 0.08)
+	bounce.tween_property(node, "position:y", to.y, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await bounce.finished
+	_anim_end(a, body)
+
+
+func _launch_step(v: float, node: Node3D, p0: Vector3, ctrl: Vector3, p1: Vector3) -> void:
+	if is_instance_valid(node):
+		node.position = _swap_arc_point(v, p0, ctrl, p1)
+
+
+## 碎裂：24 个小方块从身体位置散开收缩，棋子本体积同步缩到一点
+func piece_dissolve(node: Node3D, color := Color("c8b8ff")) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var s0 := node.scale
+	node.set_meta("fx_scale", s0)
+	var yaw0 := node.rotation.y
+	node.set_meta("fx_yaw", yaw0)
+	var g := Vector3(node.position.x, node.position.y + 56.0, node.position.z)
+	for i in 24:
+		var bm := BoxMesh.new()
+		var sz := randf_range(4.0, 9.0)
+		bm.size = Vector3(sz, sz, sz)
+		var mi := _fx_mesh(bm, g + Vector3(randf_range(-26.0, 26.0), randf_range(-40.0, 40.0), randf_range(-26.0, 26.0)), color, 2.4)
+		var a2 := TAU * randf()
+		var end := g + Vector3(cos(a2) * randf_range(40.0, 96.0), randf_range(-50.0, 70.0), sin(a2) * randf_range(40.0, 96.0))
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", end, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "rotation", Vector3(randf() * TAU, randf() * TAU, randf() * TAU), 0.34)
+		t.tween_property(mi, "scale", Vector3.ONE * 0.1, 0.34)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.34)
+		t.chain().tween_callback(mi.queue_free)
+	var shrink := create_tween()
+	shrink.set_parallel(true)
+	shrink.tween_property(node, "scale", Vector3.ONE * 0.02, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	shrink.tween_property(node, "rotation:y", yaw0 + TAU * 0.5, 0.35)
+	await shrink.finished
+	_anim_end(a, body)
+
+
+## 重组：24 个小方块从四周合拢，棋子本体从一点放大回原尺寸
+func piece_reassemble(node: Node3D, color := Color("c8b8ff")) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var a := _anim_begin(node)
+	var body: Node3D = a.get("body", null)
+	var s0: Vector3 = node.get_meta("fx_scale", Vector3.ONE)
+	var yaw0: float = node.get_meta("fx_yaw", node.rotation.y)
+	var g := Vector3(node.position.x, node.position.y + 56.0, node.position.z)
+	for i in 24:
+		var bm := BoxMesh.new()
+		var sz := randf_range(4.0, 9.0)
+		bm.size = Vector3(sz, sz, sz)
+		var a2 := TAU * float(i) / 24.0 + randf() * 0.3
+		var start := g + Vector3(cos(a2) * randf_range(60.0, 110.0), randf_range(-60.0, 90.0), sin(a2) * randf_range(60.0, 110.0))
+		var mi := _fx_mesh(bm, start, color, 2.8)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", g, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_property(mi, "rotation", Vector3(randf() * TAU, randf() * TAU, randf() * TAU), 0.35)
+		t.tween_property(mi, "scale", Vector3.ONE * 0.1, 0.35)
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.35)
+		t.chain().tween_callback(mi.queue_free)
+	var grow := create_tween()
+	grow.set_parallel(true)
+	grow.tween_property(node, "scale", s0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	grow.tween_property(node, "rotation:y", yaw0, 0.35)
+	await grow.finished
+	_anim_end(a, body)
+	if is_instance_valid(node):
+		event_ring(Vector3(node.position.x, TILE_TOP, node.position.z), color)
+
+
+## 发光球沿浅弧线飞行，到达终点即“命中帧”；尾迹可以是火花或烟
+func orb_fly(from: Vector3, to: Vector3, color: Color, trail := "spark", dur := 0.35) -> void:
+	var ctrl := (from + to) * 0.5 + Vector3(0, maxf(from.distance_to(to) * 0.18, 46.0), 0)
+	var sm := SphereMesh.new()
+	sm.radius = 9.0
+	sm.height = 18.0
+	sm.radial_segments = 10
+	sm.rings = 6
+	var mi := _fx_mesh(sm, from, color, 4.0)
+	var t := create_tween()
+	t.tween_method(_orb_step.bind(mi, from, ctrl, to), 0.0, 1.0, dur) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	for k in 5:
+		var at := dur * float(k) / 5.0
+		var pt := _swap_arc_point(float(k) / 5.0, from, ctrl, to)
+		var tt := create_tween()
+		tt.tween_interval(at)
+		tt.tween_callback(_spawn_trail_dot.bind(pt, color, trail))
+	await t.finished
+	_fx_shards(to, color, 4, 26.0, 36.0, 3.4, 0.3)
+	if is_instance_valid(mi):
+		mi.queue_free()
+
+
+func _orb_step(v: float, mi: Node3D, p0: Vector3, ctrl: Vector3, p1: Vector3) -> void:
+	if is_instance_valid(mi):
+		mi.position = _swap_arc_point(v, p0, ctrl, p1)
+
+
+func _spawn_trail_dot(pos: Vector3, color: Color, trail: String) -> void:
+	var sm := SphereMesh.new()
+	sm.radius = 6.5
+	sm.height = 13.0
+	sm.radial_segments = 6
+	sm.rings = 3
+	var mi := MeshInstance3D.new()
+	mi.mesh = sm
+	if trail == "smoke":
+		mi.material_override = _unshaded(Color(0.14, 0.12, 0.13), 0.2)
+		(mi.material_override as StandardMaterial3D).albedo_color = Color(0.16, 0.14, 0.15, 0.5)
+	else:
+		mi.material_override = _unshaded(color, 2.6)
+	mi.position = pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(mi)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(mi, "scale", Vector3.ONE * (2.0 if trail == "smoke" else 0.2), 0.4)
+	t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.4)
+	t.chain().tween_callback(mi.queue_free)
+
+
+## 命中特效：ice 冰晶+冰雾 / fire 火柱+焦痕 / hit 闪光+碎屑 / gravity 下压环
+func impact_kind(kind: String, pos: Vector3, color: Color) -> void:
+	var g := Vector3(pos.x, TILE_TOP + 2.0, pos.z)
+	match kind:
+		"ice":
+			_fx_spikes(g, color.lightened(0.3), 8, 30.0, 54.0)
+			for i in 6:
+				var sm := SphereMesh.new()
+				sm.radius = 18.0
+				sm.height = 36.0
+				sm.radial_segments = 8
+				sm.rings = 5
+				var a := TAU * float(i) / 6.0
+				var mi := _fx_mesh(sm, g + Vector3(cos(a) * 30.0, 18.0, sin(a) * 30.0), Color("cfeaff"), 1.0)
+				(mi.material_override as StandardMaterial3D).albedo_color = Color(0.82, 0.94, 1.0, 0.28)
+				var t := create_tween()
+				t.set_parallel(true)
+				t.tween_property(mi, "position", g + Vector3(cos(a) * 74.0, 44.0, sin(a) * 74.0), 0.6)
+				t.tween_property(mi, "scale", Vector3.ONE * 1.8, 0.6)
+				t.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.6)
+				t.chain().tween_callback(mi.queue_free)
+			_shockwave(g, color, 0.0, 3.0, 0.5)
+		"fire":
+			var cm := CylinderMesh.new()
+			cm.top_radius = 8.0
+			cm.bottom_radius = 26.0
+			cm.height = 150.0
+			cm.radial_segments = 12
+			var col := _fx_mesh(cm, g + Vector3(0, 20.0, 0), color, 3.0)
+			col.scale = Vector3(0.3, 0.08, 0.3)
+			var t := create_tween()
+			t.set_parallel(true)
+			t.tween_property(col, "scale", Vector3(1.0, 1.5, 1.0), 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			t.tween_property(col.material_override, "albedo_color:a", 0.0, 0.36).set_delay(0.28)
+			t.chain().tween_callback(col.queue_free)
+			_fx_fire_puffs(g, color, 6)
+			_fx_shards(g, color.lightened(0.2), 10, 82.0, 120.0, 5.0, 0.5)
+			decal_scorch(Vector3(pos.x, 0.0, pos.z))
+		"gravity":
+			var ring := _glow_ring(color, 36.0, 48.0)
+			ring.position = Vector3(g.x, TILE_TOP + 190.0, g.z)
+			ring.rotation.x = PI * 0.5
+			ring.scale = Vector3(1.4, 1.4, 1.4)
+			var t := create_tween()
+			t.set_parallel(true)
+			t.tween_property(ring, "position:y", TILE_TOP + 4.0, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			t.tween_property(ring, "scale", Vector3(2.2, 2.2, 2.2), 0.28)
+			t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.3).set_delay(0.16)
+			t.chain().tween_callback(ring.queue_free)
+			_fx_shards(g, color.darkened(0.15), 8, 52.0, 26.0, 5.0, 0.42)
+		_:
+			impact(pos, color)
+			_fx_shards(g, color, 10, 68.0, 82.0, 5.0, 0.42)
+
+
+## 施法者手心连向目标的一条逐渐绷直的细光束，结束后自动淡出释放
+func tether(from: Node3D, to: Node3D, color: Color, dur := 0.4) -> void:
+	if from == null or to == null or not is_instance_valid(from) or not is_instance_valid(to):
+		return
+	var a := from.position + Vector3(0, 68.0, 0)
+	var b := to.position + Vector3(0, 58.0, 0)
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 3.2
+	cm.bottom_radius = 3.2
+	cm.height = maxf(a.distance_to(b), 1.0)
+	cm.radial_segments = 8
+	mi.mesh = cm
+	mi.material_override = _unshaded(color, 3.4)
+	mi.position = (a + b) * 0.5
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(mi)
+	mi.look_at(b, Vector3.UP)
+	mi.rotate_object_local(Vector3.RIGHT, PI / 2.0)
+	mi.scale = Vector3(1.0, 0.05, 1.0)
+	var t := create_tween()
+	t.tween_property(mi, "scale", Vector3(1.0, 1.0, 1.0), dur * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_interval(maxf(dur * 0.25, 0.05))
+	t.tween_property(mi.material_override, "albedo_color:a", 0.0, dur * 0.4)
+	t.tween_callback(_free_if_valid.bind(mi))
+	await get_tree().create_timer(dur * 0.8).timeout
+
+
+## 护体：光环从脚底升起收束，随后留一层持续可见的同色边缘光
+func aura_bind(node: Node3D, color: Color) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var g := Vector3(node.position.x, TILE_TOP + 2.0, node.position.z)
+	for k in 2:
+		var ring := _glow_ring(color, 34.0 + float(k) * 10.0, 42.0 + float(k) * 10.0)
+		ring.position = g + Vector3(0, 4.0, 0)
+		ring.scale = Vector3(1.25, 1.0, 1.25)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(ring, "position:y", g.y + 108.0, 0.34).set_delay(0.06 * float(k)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(ring, "scale", Vector3(0.35, 1.0, 0.35), 0.34).set_delay(0.06 * float(k))
+		t.tween_property(ring.material_override, "albedo_color:a", 0.0, 0.3).set_delay(0.12 + 0.06 * float(k))
+		t.chain().tween_callback(ring.queue_free)
+	if node.has_node("AuraBind"):
+		(node.get_node("AuraBind") as Node3D).queue_free()
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 62.0
+	sm.height = 124.0
+	sm.radial_segments = 20
+	sm.rings = 10
+	mi.mesh = sm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.13)
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 0.55
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.position.y = 56.0
+	mi.name = "AuraBind"
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.add_child(mi)
+	await get_tree().create_timer(0.36).timeout
+
+
+func aura_unbind(node: Node3D) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var n := node.get_node_or_null("AuraBind")
+	if n:
+		n.queue_free()
+
+
+## 卡牌：一张扁平小方块旋转着沿弧线飞回
+func card_arc(from: Vector3, to: Vector3) -> void:
+	var bm := BoxMesh.new()
+	bm.size = Vector3(26.0, 2.0, 34.0)
+	var mi := _fx_mesh(bm, from, Color("ffd98a"), 2.6)
+	var ctrl := (from + to) * 0.5 + Vector3(0, maxf(from.distance_to(to) * 0.16, 70.0), 0)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_method(_launch_step.bind(mi, from, ctrl, to), 0.0, 1.0, 0.5) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_property(mi, "rotation", Vector3(TAU * 1.5, TAU, TAU * 0.5), 0.5)
+	await t.finished
+	if is_instance_valid(mi):
+		var f := create_tween()
+		f.set_parallel(true)
+		f.tween_property(mi, "scale", Vector3.ONE * 0.2, 0.2)
+		f.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.2)
+		f.chain().tween_callback(mi.queue_free)
+		await f.finished
+
+
+## 地面焦痕：深色扁圆贴片，6 秒内淡出
+func decal_scorch(pos: Vector3) -> void:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.06, 0.045, 0.04, 0.72)
+	var root := Node3D.new()
+	root.name = "Scorch"
+	root.position = Vector3(pos.x, TILE_TOP + 0.5, pos.z)
+	root.scale = Vector3(0.6, 1.0, 0.6)
+	_fx.add_child(root)
+	var disc := _add_cyl(root, 44.0, 44.0, 0.6, Vector3.ZERO, mat, 24)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var t := create_tween()
+	t.tween_property(root, "scale", Vector3(1.0, 1.0, 1.0), 0.25)
+	t.tween_interval(5.2)
+	t.tween_property(mat, "albedo_color:a", 0.0, 0.8)
+	t.tween_callback(_free_if_valid.bind(root))
+
+
+func _free_if_valid(n: Node) -> void:
+	if n != null and is_instance_valid(n):
+		n.queue_free()
+
+
+## 施法者头顶升起一个该道具色的小立方，放大 0.25s 后朝 dir 方向飞走
+func item_glyph(node: Node3D, item_id: String, color: Color, dir := Vector3.ZERO) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var bm := BoxMesh.new()
+	bm.size = Vector3(18.0, 18.0, 5.0) if item_id in ["double", "shield"] else Vector3(16.0, 16.0, 16.0)
+	var mi := _fx_mesh(bm, node.position + Vector3(0, 148.0, 0), color, 3.0)
+	mi.scale = Vector3.ONE * 0.2
+	var fly := Vector3(dir.x, 0.0, dir.z)
+	if fly.length() < 0.001:
+		fly = Vector3(sin(node.rotation.y), 0.0, cos(node.rotation.y))
+	fly = fly.normalized()
+	var rise := create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(mi, "scale", Vector3.ONE * 1.5, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rise.tween_property(mi, "rotation", Vector3(0.3, 1.2, 0.2), 0.25)
+	await rise.finished
+	if not is_instance_valid(mi):
+		return
+	var go := create_tween()
+	go.set_parallel(true)
+	go.tween_property(mi, "position", mi.position + fly * 150.0 + Vector3(0, 26.0, 0), 0.34)
+	go.tween_property(mi, "scale", Vector3.ONE * 0.15, 0.34)
+	go.tween_property(mi.material_override, "albedo_color:a", 0.0, 0.34)
+	go.chain().tween_callback(mi.queue_free)
+
+
+## 速度线：3 条细长光条从身后掠过（boost / steal 的手影复用）
+func speed_lines(node: Node3D, color: Color, count := 3, dur := 0.35, dir := Vector3.ZERO) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var forward := Vector3(dir.x, 0.0, dir.z)
+	if forward.length() < 0.001:
+		forward = Vector3(sin(node.rotation.y), 0.0, cos(node.rotation.y))
+	forward = forward.normalized()
+	var side := Vector3(-forward.z, 0.0, forward.x)
+	for i in count:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(3.0, 3.0, 58.0)
+		var off := side * (float(i) - float(count - 1) * 0.5) * 26.0
+		var mi := _fx_mesh(bm, node.position + off - forward * 130.0 + Vector3(0, 26.0 + float(i) * 22.0, 0), color, 3.2)
+		mi.rotation.y = atan2(forward.x, forward.z)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", mi.position + forward * 300.0, dur).set_delay(0.04 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "scale", Vector3(1.0, 1.0, 1.8), dur).set_delay(0.04 * float(i))
+		t.tween_property(mi.material_override, "albedo_color:a", 0.0, dur).set_delay(0.04 * float(i))
+		t.chain().tween_callback(mi.queue_free)
+	await get_tree().create_timer(dur + 0.08).timeout
+
+
+## 护盾拼装：12 块小方块从四周飞来，在身体周围扣合成罩
+func shield_build(node: Node3D, color: Color, count := 12, dur := 0.35) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var g := Vector3(node.position.x, node.position.y + 56.0, node.position.z)
+	for i in count:
+		var a := TAU * float(i) / float(count)
+		var bm := BoxMesh.new()
+		bm.size = Vector3(12.0, 12.0, 5.0)
+		var mi := _fx_mesh(bm, g + Vector3(cos(a) * 120.0, randf_range(-40.0, 90.0), sin(a) * 120.0), color, 2.6)
+		var home := g + Vector3(cos(a) * 52.0, randf_range(-26.0, 62.0), sin(a) * 52.0)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(mi, "position", home, dur).set_delay(0.02 * float(i)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(mi, "rotation", Vector3(0.6, a, 0.3), dur)
+		t.chain().tween_property(mi.material_override, "albedo_color:a", 0.0, 0.12)
+		t.chain().tween_callback(mi.queue_free)
+	await get_tree().create_timer(dur + 0.12).timeout
+	_shockwave(Vector3(node.position.x, TILE_TOP, node.position.z), color, 0.0, 2.6, 0.45)
+
+
+## 冰壳：半透明冰层从脚往上爬到头顶，短暂停留后淡出
+func ice_shell(node: Node3D, color: Color, dur := 0.5) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	# 冰封期间冻结拟人待机，制造“停住”的受击反应
+	var aa := _anim_begin(node)
+	var abody: Node3D = aa.get("body", null)
+	var root := Node3D.new()
+	root.name = "IceShell"
+	root.position = node.position + Vector3(0, 2.0, 0)
+	_fx.add_child(root)
+	var cm := CylinderMesh.new()
+	cm.top_radius = 34.0
+	cm.bottom_radius = 46.0
+	cm.height = 118.0
+	cm.radial_segments = 16
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.30)
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 1.1
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.position.y = 59.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	root.scale = Vector3(1.0, 0.03, 1.0)
+	var t := create_tween()
+	t.tween_property(root, "scale", Vector3(1.0, 1.0, 1.0), dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	for k in 5:
+		var a := TAU * float(k) / 5.0
+		var spire := MeshInstance3D.new()
+		var scm := CylinderMesh.new()
+		scm.top_radius = 0.0
+		scm.bottom_radius = 7.0
+		scm.height = 34.0
+		scm.radial_segments = 5
+		spire.mesh = scm
+		spire.material_override = _unshaded(color.lightened(0.25), 2.2)
+		spire.position = Vector3(cos(a) * 42.0, 12.0, sin(a) * 42.0)
+		root.add_child(spire)
+	await t.finished
+	impact_kind("ice", node.position, color)
+	await get_tree().create_timer(0.85 * dur + 0.25).timeout
+	_anim_end(aa, abody)
+	if is_instance_valid(root):
+		var f := create_tween()
+		f.set_parallel(true)
+		f.tween_property(mat, "albedo_color:a", 0.0, 0.35)
+		for ch in root.get_children():
+			if ch is MeshInstance3D and ch != mi:
+				f.tween_property(ch.material_override, "albedo_color:a", 0.0, 0.35)
+		f.chain().tween_callback(root.queue_free)
+
+
+## 锁定环：目标头顶红色锁定圈收缩闪一下
+func lock_on(node: Node3D, color: Color, dur := 0.2) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var ring := _glow_ring(color, 30.0, 38.0)
+	ring.position = Vector3(node.position.x, node.position.y + 150.0, node.position.z)
+	ring.rotation.x = PI * 0.5
+	ring.scale = Vector3(2.0, 2.0, 2.0)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(ring, "scale", Vector3(0.45, 0.45, 0.45), dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.tween_property(ring.material_override, "albedo_color:a", 0.0, dur).set_delay(0.08)
+	t.chain().tween_callback(ring.queue_free)
+	await get_tree().create_timer(dur).timeout
+
+
+## 旋风：3 个旋转薄环绕身旋转
+func wind_rings(node: Node3D, color: Color, count := 3, dur := 0.45) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	for i in count:
+		var ring := _glow_ring(color, 30.0, 38.0)
+		ring.position = Vector3(node.position.x, node.position.y + 34.0 + float(i) * 30.0, node.position.z)
+		ring.rotation.x = PI * 0.5
+		ring.scale = Vector3(0.4, 0.4, 0.4)
+		var t := create_tween()
+		t.set_parallel(true)
+		t.tween_property(ring, "scale", Vector3(1.5, 1.5, 1.5), dur * 0.6).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(ring, "rotation:y", 9.0 + float(i) * 2.0, dur)
+		t.chain().tween_property(ring.material_override, "albedo_color:a", 0.0, dur * 0.4)
+		t.chain().tween_callback(ring.queue_free)
+	await get_tree().create_timer(dur).timeout
+
+
+## 虚空裂纹：地面裂开黑紫裂隙并向下拉拽
+func void_crack(pos: Vector3, color: Color) -> void:
+	impact_kind("gravity", pos, color)
+	_fx_rift(Vector3(pos.x, TILE_TOP, pos.z), color)
+	_fx_spiral(Vector3(pos.x, TILE_TOP + 2.0, pos.z), color, 12, 58.0, 40.0, true)
+	await get_tree().create_timer(0.32).timeout
+
+
+## 投掷炸弹：铁球带着引线旋转抛出，落地弹一下后白闪 + 火球 + 碎片 + 烟尘 + 焦痕
+func bomb_throw(from: Vector3, to: Vector3, color: Color) -> void:
+	var sm := SphereMesh.new()
+	sm.radius = 14.0
+	sm.height = 28.0
+	sm.radial_segments = 10
+	sm.rings = 6
+	var ball := MeshInstance3D.new()
+	ball.mesh = sm
+	ball.material_override = _pbr(Color("2f343c"), 0.6, 0.4)
+	ball.position = from + Vector3(0, 70.0, 0)
+	ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(ball)
+	var fuse := _fx_mesh(sm, ball.position + Vector3(0, 18.0, 0), Color("ffd166"), 3.6)
+	fuse.scale = Vector3(0.22, 0.22, 0.22)
+	var ctrl := (ball.position + to) * 0.5 + Vector3(0, 150.0, 0)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_method(_launch_step.bind(ball, ball.position, ctrl, to), 0.0, 1.0, 0.5) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_property(ball, "rotation", Vector3(TAU, TAU * 0.6, TAU), 0.5)
+	t.chain().tween_callback(_free_if_valid.bind(fuse))
+	await t.finished
+	if not is_instance_valid(ball):
+		return
+	var hop := create_tween()
+	hop.tween_property(ball, "position:y", to.y + 26.0, 0.07)
+	hop.tween_property(ball, "position:y", to.y, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await hop.finished
+	fx_sound("cap_slam")
+	if is_instance_valid(ball):
+		ball.queue_free()
+	_shockwave(to, Color(1.0, 0.96, 0.86), 0.0, 4.6, 0.4)
+	impact_kind("fire", to, color)
+	_fx_shards(Vector3(to.x, TILE_TOP + 2.0, to.z), color.lightened(0.3), 12, 120.0, 140.0, 7.0, 0.6)
+	for k in 4:
+		_spawn_trail_dot(Vector3(to.x, TILE_TOP + 20.0, to.z), color, "smoke")
+	await get_tree().create_timer(0.18).timeout
+
+
+## 换位：两枚棋子同时腾空，沿镜像弧线交叉飞过，中途留残影，落地各炸一圈光环
+## a_to / b_to 省略时按“互相飞到对方当前坐标”处理
+func piece_swap_arc(a: Node3D, b: Node3D, color: Color, a_to := Vector3.INF, b_to := Vector3.INF) -> void:
+	if a == null or b == null or not is_instance_valid(a) or not is_instance_valid(b):
+		return
+	var a_start := a.position
+	var b_start := b.position
+	if a_to == Vector3.INF:
+		a_to = b_start
+	if b_to == Vector3.INF:
+		b_to = a_start
+	var mid := (a_start + b_start) * 0.5
+	# 出发点连线的垂线，用来把两条弧线掰向左右两侧
+	var flat := Vector2(b_start.x - a_start.x, b_start.z - a_start.z)
+	var perp := Vector3(-flat.y, 0.0, flat.x)
+	if perp.length() < 0.001:
+		perp = Vector3.RIGHT
+	perp = perp.normalized()
+	# 两枚棋子都在 y + 70 的高空掠过，高点再错开 18 单位避免穿模
+	var ctrl_a := mid + perp * 46.0 + Vector3(0.0, 70.0, 0.0)
+	var ctrl_b := mid - perp * 46.0 + Vector3(0.0, 88.0, 0.0)
+	_swap_ghost_trail(a, a_start, ctrl_a, a_to, color)
+	_swap_ghost_trail(b, b_start, ctrl_b, b_to, color)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_method(_swap_arc_step.bind(a, a_start, ctrl_a, a_to), 0.0, 1.0, 1.2) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_method(_swap_arc_step.bind(b, b_start, ctrl_b, b_to), 0.0, 1.0, 1.2) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await t.finished
+	# 落地各炸一圈；节点位置交给主流程按数据设置，这里不改
+	if is_instance_valid(a):
+		event_ring(a.position, color)
+	if is_instance_valid(b):
+		event_ring(b.position, color)
+
+
+## 二次贝塞尔：t = 0 起点、t = 1 终点
+func _swap_arc_point(t: float, p0: Vector3, ctrl: Vector3, p1: Vector3) -> Vector3:
+	var u := 1.0 - t
+	return p0 * (u * u) + ctrl * (2.0 * u * t) + p1 * (t * t)
+
+
+func _swap_arc_step(t: float, node: Node3D, p0: Vector3, ctrl: Vector3, p1: Vector3) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	node.position = _swap_arc_point(t, p0, ctrl, p1)
+
+
+## 飞行途中在弧线上留下 3 个半透明残影，只做视觉，不进 pieces 数据
+func _swap_ghost_trail(node: Node3D, p0: Vector3, ctrl: Vector3, p1: Vector3, color: Color) -> void:
+	for k in 3:
+		var at := 0.30 + 0.18 * float(k)
+		var pos := _swap_arc_point(at / 1.2, p0, ctrl, p1)
+		var t := create_tween()
+		t.tween_interval(at)
+		t.tween_callback(_spawn_swap_ghost.bind(node, pos, color))
+
+
+func _spawn_swap_ghost(node: Node3D, pos: Vector3, color: Color) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var ghost := node.duplicate() as Node3D
+	if ghost == null:
+		return
+	ghost.name = "SwapGhost"
+	ghost.position = pos
+	ghost.rotation = node.rotation
+	ghost.scale = node.scale
+	var fade_mats: Array = []
+	for mi in _mesh_nodes(ghost):
+		if String(mi.name).contains("ContactShadow"):
+			mi.visible = false
+			continue
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var src := mi.material_override as StandardMaterial3D
+		var mat: StandardMaterial3D = null
+		if src != null:
+			mat = src.duplicate() as StandardMaterial3D
+			mat.albedo_color = Color(mat.albedo_color.r, mat.albedo_color.g, mat.albedo_color.b, 0.45)
+		else:
+			mat = _unshaded(color.lightened(0.3), 1.4)
+			mat.albedo_color = Color(mat.albedo_color.r, mat.albedo_color.g, mat.albedo_color.b, 0.4)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mi.material_override = mat
+		fade_mats.append(mat)
+	_fx.add_child(ghost)
+	var t := create_tween()
+	t.set_parallel(true)
+	for mat in fade_mats:
+		t.tween_property(mat, "albedo_color:a", 0.0, 0.42)
+	t.tween_property(ghost, "scale", ghost.scale * 1.2, 0.42)
+	t.chain().tween_callback(ghost.queue_free)
+
+
+func _mesh_nodes(root: Node) -> Array:
+	var out: Array = []
+	for child in root.get_children():
+		if child is MeshInstance3D:
+			out.append(child)
+		out.append_array(_mesh_nodes(child))
+	return out
 
 
 func _build_pawn_mesh() -> ArrayMesh:
@@ -2705,6 +3497,39 @@ func capture_blast(pos: Vector3, color: Color) -> void:
 
 	burst(pos, color, 18)
 	finish_beam(pos, color)
+
+
+## 踩成一滩：地面上的独立圆盘（挂在 _fx 下，不跟随棋子），扩散同时淡出
+func puddle(pos: Vector3, color: Color) -> void:
+	var root := Node3D.new()
+	root.name = "Puddle"
+	root.position = Vector3(pos.x, TILE_TOP + 0.6, pos.z)
+	root.scale = Vector3(0.25, 1.0, 0.25)
+	_fx.add_child(root)
+	# 主体：比棋子颜色暗一档的扁平圆盘
+	var body_mat := StandardMaterial3D.new()
+	body_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	body_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	body_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var dark := color.darkened(0.25)
+	body_mat.albedo_color = Color(dark.r, dark.g, dark.b, 0.85)
+	var disc := _add_cyl(root, 26.0, 26.0, 1.2, Vector3.ZERO, body_mat, 32)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 外圈：略大一圈的亮色边，勾出“一滩”的轮廓
+	var rim_mat := StandardMaterial3D.new()
+	rim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rim_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rim_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var bright := color.lightened(0.15)
+	rim_mat.albedo_color = Color(bright.r, bright.g, bright.b, 0.55)
+	var rim := _add_cyl(root, 29.0, 29.0, 0.8, Vector3(0.0, -0.15, 0.0), rim_mat, 32)
+	rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(root, "scale", Vector3(1.7, 1.0, 1.7), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(body_mat, "albedo_color:a", 0.0, 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.tween_property(rim_mat, "albedo_color:a", 0.0, 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.chain().tween_callback(root.queue_free)
 
 
 func _shockwave(pos: Vector3, color: Color, delay: float, target: float, life: float) -> void:
@@ -3379,10 +4204,11 @@ func event_fx(id: String, pos: Vector3, color: Color) -> void:
 			_shockwave(g, color, 0.0, 2.6, 0.5)
 
 
-## 冰晶爆发
+## 冰晶爆发（时长整体放慢 1.4 倍，看得清结冰过程）
 func freeze_burst(pos: Vector3, color: Color) -> void:
-	for k in 9:
-		var a := TAU * float(k) / 9.0
+	var k := 1.4
+	for i in 9:
+		var a := TAU * float(i) / 9.0
 		var spire := MeshInstance3D.new()
 		var cm := CylinderMesh.new()
 		cm.top_radius = 0.0
@@ -3398,11 +4224,32 @@ func freeze_burst(pos: Vector3, color: Color) -> void:
 		_fx.add_child(spire)
 		var t := create_tween()
 		t.set_parallel(true)
-		t.tween_property(spire, "position:y", 62.0, 0.36).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		t.tween_property(spire, "scale", Vector3(0.1, 0.1, 0.1), 0.5).set_delay(0.5)
-		t.tween_property(spire.material_override, "albedo_color:a", 0.0, 0.5).set_delay(0.5)
+		t.tween_property(spire, "position:y", 62.0, 0.36 * k).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(spire, "scale", Vector3(0.1, 0.1, 0.1), 0.5 * k).set_delay(0.5 * k)
+		t.tween_property(spire.material_override, "albedo_color:a", 0.0, 0.5 * k).set_delay(0.5 * k)
 		t.chain().tween_callback(spire.queue_free)
-	_shockwave(pos, color, 0.0, 3.6, 0.55)
+	_shockwave(pos, color, 0.0, 3.6, 0.55 * k)
+
+
+## 荆棘：六根细锥从地下窜起 → 停留 → 缩回，带一点横向散开
+func spike_burst(pos: Vector3, color: Color) -> void:
+	fx_sound("cap_slam", -4.0)
+	var start_y := TILE_TOP - 20.0
+	var end_y := TILE_TOP + 14.0
+	for i in 6:
+		var a := TAU * float(i) / 6.0
+		var off := Vector3(cos(a) * 15.0, 0.0, sin(a) * 15.0)
+		var mi := _add_cyl(_fx, 0.0, 6.5, 44.0,
+			Vector3(pos.x + off.x, start_y, pos.z + off.z), _unshaded(color, 2.6), 6)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# 每根锥略微歪斜，避免整齐得像栅栏
+		mi.rotation.z = randf_range(-0.16, 0.16)
+		mi.rotation.x = randf_range(-0.16, 0.16)
+		var t := create_tween()
+		t.tween_property(mi, "position:y", end_y, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_interval(0.12)
+		t.tween_property(mi, "position:y", start_y - 10.0, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		t.tween_callback(mi.queue_free)
 
 
 ## 狙击：从施法者到目标的能量射线
