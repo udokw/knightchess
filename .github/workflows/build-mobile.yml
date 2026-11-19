@@ -1,0 +1,246 @@
+name: Build Mobile (iOS IPA + Android APK)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  VERSION_NAME: "1.0.0"
+  VERSION_CODE: "1"
+  GODOT_VERSION: "4.3-stable"
+  GODOT_TEMPLATE_DIR: "4.3.stable"
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 build-tools
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "build-tools;34.0.0" "platforms;android-34" > /dev/null
+          ls "$ANDROID_SDK_ROOT/build-tools"
+
+      - name: 下载 Godot 与导出模板
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${GODOT_VERSION}_linux.x86_64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+
+          curl -fL --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          unzip -q templates.tpz -d /tmp/godot_templates
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+          mv /tmp/godot_templates/templates "$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}"
+          godot --headless --version
+          ls "$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}" | head -20
+
+      - name: 生成 debug keystore
+        run: |
+          set -euo pipefail
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
+            -keystore "$HOME/android_debug.keystore" -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          ls -l "$HOME/android_debug.keystore"
+
+      - name: 写入 Godot 编辑器设置
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.3.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/android_debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+      - name: 校验版本号一致
+        run: |
+          python3 - <<'PY'
+          import re
+          s = open("export_presets.cfg", encoding="utf-8-sig").read()
+          ios_ver = re.search(r'application/short_version="([^"]+)"', s).group(1)
+          ios_build = re.search(r'application/version="([^"]+)"', s).group(1)
+          and_ver = re.search(r'version/name="([^"]+)"', s).group(1)
+          and_code = re.search(r'version/code=(\d+)', s).group(1)
+          assert (ios_ver, ios_build) == (and_ver, and_code), (ios_ver, ios_build, and_ver, and_code)
+          print("iOS/Android 版本一致:", ios_ver, ios_build)
+          PY
+
+      - name: 导入资源并导出 APK
+        run: |
+          set -euo pipefail
+          godot --headless --path . --import || true
+          godot --headless --path . --import
+          mkdir -p build
+          godot --headless --path . --export-debug "Android" build/KnightChess.apk
+          ls -lh build/KnightChess.apk
+
+      - name: 校验 APK 签名与包信息
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | head -1)
+          "$APKSIGNER" verify --print-certs build/KnightChess.apk
+          AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt2 | head -1)
+          "$AAPT" dump badging build/KnightChess.apk | head -5
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KnightChess3-android-apk
+          path: build/KnightChess.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS Unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Godot 与 iOS 导出模板
+        run: |
+          set -euo pipefail
+          GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+          curl -fL --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          unzip -q godot.zip
+          sudo mv Godot.app /Applications/
+          sudo xattr -dr com.apple.quarantine /Applications/Godot.app || true
+
+          curl -fL --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          unzip -q templates.tpz -d /tmp/godot_templates
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
+          mv /tmp/godot_templates/templates "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_DIR}"
+          "$GODOT" --headless --version
+          ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_DIR}" | head -20
+
+      - name: 校验版本号一致
+        run: |
+          python3 - <<'PY'
+          import re
+          s = open("export_presets.cfg", encoding="utf-8-sig").read()
+          ios_ver = re.search(r'application/short_version="([^"]+)"', s).group(1)
+          ios_build = re.search(r'application/version="([^"]+)"', s).group(1)
+          and_ver = re.search(r'version/name="([^"]+)"', s).group(1)
+          and_code = re.search(r'version/code=(\d+)', s).group(1)
+          assert (ios_ver, ios_build) == (and_ver, and_code), (ios_ver, ios_build, and_ver, and_code)
+          print("iOS/Android 版本一致:", ios_ver, ios_build)
+          PY
+
+      - name: 导入资源
+        run: |
+          set -euo pipefail
+          GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+          "$GODOT" --headless --path . --import || true
+          "$GODOT" --headless --path . --import
+
+      - name: 导出 Xcode 工程
+        run: |
+          set -euo pipefail
+          GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+          mkdir -p build
+          "$GODOT" --headless --path . --export-release "iOS" build/KnightChess.ipa
+          echo "--- build 目录 ---"
+          find build -maxdepth 3 -name "*.xcodeproj" -o -maxdepth 3 -name "*.pbxproj" | head -5
+          PROJ=$(find build -name "*.xcodeproj" -maxdepth 4 | head -1)
+          test -n "$PROJ" || { echo "未找到 xcodeproj"; ls -R build | head -50; exit 1; }
+          xcodebuild -list -json -project "$PROJ"
+
+      - name: 构建未签名 ipa
+        run: |
+          set -euo pipefail
+          PROJ=$(find build -name "*.xcodeproj" -maxdepth 4 | head -1)
+          SCHEME=$(xcodebuild -list -json -project "$PROJ" | python3 -c "import json,sys; p=json.load(sys.stdin)['project']; print((p.get('schemes') or p['targets'])[0])")
+          echo "project=$PROJ scheme=$SCHEME"
+          xcodebuild -project "$PROJ" -scheme "$SCHEME" \
+            -configuration Release -destination "generic/platform=iOS" \
+            -archivePath build/KnightChess.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          APP=$(find build/KnightChess.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -1)
+          test -n "$APP" || { echo "归档里没有 .app"; find build/KnightChess.xcarchive -maxdepth 4; exit 1; }
+          echo "app: $APP"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          cd build/ipa
+          zip -qry ../KnightChess-unsigned.ipa Payload
+          cd ..
+          ls -lh KnightChess-unsigned.ipa
+          unzip -l KnightChess-unsigned.ipa | head -5
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: KnightChess3-ios-ipa
+          path: build/KnightChess-unsigned.ipa
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [ios, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 打 tag 并发布安装包
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          find dist -type f -exec ls -lh {} \;
+          APK=$(find dist -name "*.apk" | head -1)
+          IPA=$(find dist -name "*.ipa" | head -1)
+          test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
+          TAG="v${VERSION_NAME}"
+          cat > notes.md <<'EOF'
+          ## 骑士飞行棋3 v1.0.0
+
+          ### 本次改动
+          - 启动页 / 存档系统（20 槽，自动 + 手动）/ 局域网联机（UDP 广播发现 + TCP 房主权威）
+          - 七条体验修复：
+            1. 终点跑道与环内最后一格精确对齐，全部主题、任意格数通用
+            2. 棋盘整体放大，重算相机取景，单格更大更清晰且不出屏
+            3. 动画整体放慢；吃棋重做为一跃而起踩成一滩；荆棘/陷阱/传送演出加长
+            4. 手动存档可选槽位，覆盖前二次确认；自动存档位专用不可占用
+            5. 新增设置项「吃棋改为小游戏对决」，默认关闭，局域网同步
+            6. 使用道具补上实打实的 3D 角色演出：谁、对谁、用了什么、效果如何
+            7. 修复「换位」道具：双方真正互换，覆盖胜利通道、环道、交叉换位场景
+
+          ### 安装包
+          - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
+          - `KnightChess.apk` — debug 签名，可直接安装
+
+          版本 1.0.0（build 1）
+          EOF
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$IPA" --clobber
+          else
+            gh release create "$TAG" "$APK" "$IPA" --target "$GITHUB_SHA" \
+              --title "骑士飞行棋3 v${VERSION_NAME}" --notes-file notes.md
+          fi
+          echo "RELEASE_URL=$(gh release view "$TAG" --json url --jq .url)"
