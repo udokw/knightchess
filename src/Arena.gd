@@ -33,11 +33,12 @@ const DIE_FACES := {
 ## 三套棋盘主题：天空 / 光照 / 雾 / 石材 / 金属 全部参数化
 const THEMES := {
 	"dusk": {
+		"scene": "dusk",
 		"sky": "res://assets/textures/sky_dusk.png", "sky_energy": 0.85,
-		"ambient": 0.34, "exposure": 1.02, "saturation": 1.18, "glow": 0.7,
+		"ambient": 0.24, "exposure": 1.00, "saturation": 1.18, "glow": 0.7,
 		"sun_color": "ffdcb8", "sun_energy": 2.0, "sun_rot": Vector3(-55, -30, 0),
 		"fill_color": "6f8fd8", "fill_energy": 0.28,
-		"fog_color": "a8b8d6", "fog_energy": 0.45, "fog_density": 0.00005,
+		"fog_color": "8a93b8", "fog_energy": 0.20, "fog_density": 0.00003,
 		"center_color": "ffb46b", "center_energy": 2.2,
 		"stone_a": "c8d2e2", "stone_b": "b4c0d6", "stone_dark": "8e99b2", "deck": "7d879e",
 		"tint_a": 0.94, "tint_b": 0.94, "tint_dark": 0.85, "tint_deck": 0.60,
@@ -46,11 +47,12 @@ const THEMES := {
 		"trim": "7fe3ff", "motes": "ffcf94",
 	},
 	"frost": {
+		"scene": "frost",
 		"sky": "res://assets/textures/sky_frost.png", "sky_energy": 0.95,
-		"ambient": 0.30, "exposure": 0.86, "saturation": 1.02, "glow": 0.55,
-		"sun_color": "e6f4ff", "sun_energy": 1.6, "sun_rot": Vector3(-48, -20, 0),
+		"ambient": 0.24, "exposure": 0.84, "saturation": 1.04, "glow": 0.55,
+		"sun_color": "e6f4ff", "sun_energy": 1.05, "sun_rot": Vector3(-48, -20, 0),
 		"fill_color": "7fb0ff", "fill_energy": 0.40,
-		"fog_color": "cfe6ff", "fog_energy": 0.5, "fog_density": 0.00009,
+		"fog_color": "9ec4e0", "fog_energy": 0.14, "fog_density": 0.00002,
 		"center_color": "bfe6ff", "center_energy": 1.7,
 		"stone_a": "a9c0d8", "stone_b": "93aecb", "stone_dark": "5d7288", "deck": "6a7f96",
 		"tint_a": 0.94, "tint_b": 0.94, "tint_dark": 0.78, "tint_deck": 0.62,
@@ -59,6 +61,7 @@ const THEMES := {
 		"trim": "aef0ff", "motes": "e8f8ff",
 	},
 	"ember": {
+		"scene": "ember",
 		"sky": "res://assets/textures/sky_ember.png", "sky_energy": 0.80,
 		"ambient": 0.30, "exposure": 0.96, "saturation": 1.26, "glow": 0.76,
 		"sun_color": "ffb070", "sun_energy": 2.3, "sun_rot": Vector3(-62, -38, 0),
@@ -72,11 +75,12 @@ const THEMES := {
 		"trim": "ffb84a", "motes": "ffb066",
 	},
 	"jade": {
+		"scene": "jade",
 		"sky": "res://assets/textures/sky_jade.png", "sky_energy": 0.88,
-		"ambient": 0.34, "exposure": 0.98, "saturation": 1.10, "glow": 0.62,
-		"sun_color": "dcffd2", "sun_energy": 1.9, "sun_rot": Vector3(-50, -26, 0),
+		"ambient": 0.20, "exposure": 0.90, "saturation": 1.10, "glow": 0.62,
+		"sun_color": "dcffd2", "sun_energy": 1.25, "sun_rot": Vector3(-50, -26, 0),
 		"fill_color": "58c88a", "fill_energy": 0.32,
-		"fog_color": "a6e2c2", "fog_energy": 0.46, "fog_density": 0.00006,
+		"fog_color": "4f8a72", "fog_energy": 0.10, "fog_density": 0.00002,
 		"center_color": "7cffb8", "center_energy": 2.1,
 		"stone_a": "a6c6ac", "stone_b": "8cae96", "stone_dark": "45604e", "deck": "526f5c",
 		"tint_a": 0.95, "tint_b": 0.95, "tint_dark": 0.88, "tint_deck": 0.72,
@@ -85,6 +89,7 @@ const THEMES := {
 		"trim": "a8ffd0", "motes": "d8ffe0",
 	},
 	"void": {
+		"scene": "void",
 		"sky": "res://assets/textures/sky_void.png", "sky_energy": 0.92,
 		"ambient": 0.26, "exposure": 0.90, "saturation": 1.16, "glow": 0.86,
 		"sun_color": "c0b0ff", "sun_energy": 1.35, "sun_rot": Vector3(-68, -44, 0),
@@ -99,6 +104,7 @@ const THEMES := {
 	},
 	# 晴日草地：程序化晴空 + 暖砂台面，零泛光，主打松弛清晰的休闲感
 	"cozy": {
+		"scene": "cozy",
 		"sky": "", "sky_energy": 1.0,
 		"sky_top": "B7DDEE", "sky_horizon": "FDF4E2",
 		"ground_horizon": "EEF4DF", "ground_bottom": "CFE3C0",
@@ -121,6 +127,52 @@ const THEMES := {
 		"soil": "A87F50", "wood": "6E4E32",
 		"leaf_a": "3F7A30", "leaf_b": "33652A", "leaf_c": "5C9340",
 		"water": "6FB6C8", "hill": "7FA85F",
+	},
+	# 沙海神庙：刺眼低角度日光、长影、暖砂台面
+	"dune": {
+		"scene": "dune",
+		"sky": "", "sky_energy": 1.0,
+		"sky_top": "8FB8D8", "sky_horizon": "F6E0B4",
+		"ground_horizon": "E8C88A", "ground_bottom": "C9A468",
+		"ambient": 0.22, "exposure": 0.78, "saturation": 1.16, "glow": 0.14, "contrast": 1.26,
+		"sun_color": "fff0c8", "sun_energy": 1.15, "sun_rot": Vector3(-38, -24, 0),
+		"fill_color": "ffd08a", "fill_energy": 0.18,
+		"fog_color": "d8b87a", "fog_energy": 0.08, "fog_density": 0.00002,
+		"center_color": "ffd68a", "center_energy": 1.8,
+		"stone_a": "C8B084", "stone_b": "B89C70", "stone_dark": "7E6440", "deck": "A8875A",
+		"deck_gain": 0.92,
+		"tint_a": 1.0, "tint_b": 1.0, "tint_dark": 0.90, "tint_deck": 0.78,
+		"gold": "C8A050", "gold_em": "6A4A18",
+		"chevron": "B89A6A", "chevron_em": "FFCF7A",
+		"trim": "FFD88A", "motes": "FFE6B0",
+		"ground": "B78E52",
+		"path_a": "E8D8B8", "path_b": "D8C4A0",
+		"soil": "C9A468", "wood": "7A5A3A",
+		"leaf_a": "6A8A4A", "leaf_b": "557A3C", "leaf_c": "8A9A5A",
+		"water": "6FB6C8",
+	},
+	# 齿轮高塔：室内暖琥珀灯、黄铜机关盘、深色天顶
+	"clock": {
+		"scene": "clock",
+		"sky": "", "sky_energy": 1.0,
+		"sky_top": "0E0B08", "sky_horizon": "6A4A20",
+		"ground_horizon": "2A1E12", "ground_bottom": "0A0806",
+		"ambient": 0.30, "exposure": 0.92, "saturation": 1.05, "glow": 0.70, "contrast": 1.14,
+		"sun_color": "ffcf94", "sun_energy": 1.3, "sun_rot": Vector3(-72, -40, 0),
+		"fill_color": "5a6a8a", "fill_energy": 0.30,
+		"fog_color": "4a3a24", "fog_energy": 0.22, "fog_density": 0.00004,
+		"center_color": "ffc46a", "center_energy": 2.0,
+		"stone_a": "C8A464", "stone_b": "B08C50", "stone_dark": "5A4024", "deck": "8A6434",
+		"deck_gain": 0.98,
+		"tint_a": 1.0, "tint_b": 1.0, "tint_dark": 0.90, "tint_deck": 0.82,
+		"gold": "E0B060", "gold_em": "8A5A18",
+		"chevron": "A87A3C", "chevron_em": "FFD28A",
+		"trim": "FFD28A", "motes": "FFD8A0",
+		"ground": "6A4A28",
+		"path_a": "D8B070", "path_b": "C8A060",
+		"soil": "5A3A1E", "wood": "4A2E16",
+		"leaf_a": "4A3A24", "leaf_b": "3A2C1A", "leaf_c": "5A4630",
+		"water": "FFC46A",
 	},
 }
 
@@ -162,7 +214,10 @@ var _water: StandardMaterial3D
 # 环道踏步石：比广场浅一档，让"路"从广场里浮出来
 var _path_a: StandardMaterial3D
 var _path_b: StandardMaterial3D
-var _scenery: Node3D
+# 场景层：地形 / 远景 / 道具 / 专属光源，随主题整组重建
+const WorldBuilderScript := preload("res://src/WorldBuilder.gd")
+var _world: Node3D
+var _scene_id := ""
 var _camp_fires: Array = []
 var _noise_tex: NoiseTexture2D
 ## 由原石纹提亮而来的浅色细节贴图：能直接当反照率用，又不会把广场压成黑片
@@ -218,14 +273,14 @@ func build(points: Dictionary, ring: Array, colors: Array, theme := "dusk",
 	_dice_home = Vector3(0.0, 460.0, 0.0)
 	# 棋盘不再整体缩放：格数越多，坐标外扩越大，格子世界尺寸恒定，画面更清晰不拥挤
 	_build_environment()
-	_build_ground()
 	_make_materials()
 	_build_platform()
 	_build_track(points, ring)
 	_build_goal_lanes(points)
 	_build_bases(points)
 	_build_center()
-	_build_scenery()
+	_scene_id = String(THEMES[theme_id].get("scene", theme_id))
+	_build_world()
 	_build_motes()
 	_build_theme_fx()
 	_build_dice()
@@ -381,23 +436,15 @@ func _process(delta: float) -> void:
 
 # ---------------------------------------------------------------- 环境与材质
 
-## 草地地面：把悬浮石台放回"真实场地"里，背景不再是空灰
-func _build_ground() -> void:
-	var gc: String = String(THEMES[theme_id].get("ground", ""))
-	if gc == "":
-		return
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(9000.0, 9000.0)
-	var mi := MeshInstance3D.new()
-	mi.name = "Ground"
-	mi.mesh = pm
-	mi.position = Vector3(0, SCENE_GROUND, 0)
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(gc)
-	m.roughness = 1.0
-	m.metallic = 0.0
-	mi.material_override = m
-	add_child(mi)
+## 场景层：交给 WorldBuilder 构建当前主题的地形/远景/道具/光源，切主题时整组重建
+func _build_world() -> void:
+	if _world != null and is_instance_valid(_world):
+		remove_child(_world)
+		_world.queue_free()
+		_world = null
+	_world = WorldBuilderScript.new()
+	add_child(_world)
+	_world.build(self, theme_id, _board_scale)
 
 
 func _build_environment() -> void:
@@ -711,9 +758,11 @@ func set_theme(id: String) -> void:
 		_path_a.albedo_color = Color(th.get("path_a", th["stone_a"]))
 	if _path_b:
 		_path_b.albedo_color = Color(th.get("path_b", th["stone_b"]))
-	# 自然景物只在自然主题下出现，其他主题保持原竞技场观感
-	if _scenery:
-		_scenery.visible = bool(th.get("nature", false))
+	# 场景几何随主题切换重建：8 个场景的地形/远景/道具各不相同
+	var scene: String = String(th.get("scene", id))
+	if changed and scene != _scene_id:
+		_scene_id = scene
+		_build_world()
 	if _motes_mat:
 		_motes_mat.albedo_color = Color(th["motes"])
 		_motes_mat.emission = Color(th["motes"])
@@ -1449,96 +1498,6 @@ func _build_center() -> void:
 		add_child(g)
 
 
-## 村落外景：远山 / 树木 / 灌木 / 岩石。非自然主题下整体隐藏
-func _build_scenery() -> void:
-	_scenery = Node3D.new()
-	_scenery.name = "Scenery"
-	add_child(_scenery)
-	var grow := maxf(_board_scale, 0.001)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 6172
-
-	# 远山：地平线上一圈低多边形山丘，把场景纵深撑开
-	for k in 6:
-		var a := TAU * float(k) / 6.0 + 0.37
-		var dist := rng.randf_range(3600.0, 5000.0) * grow
-		var hr := rng.randf_range(700.0, 1100.0) * grow
-		var hill := MeshInstance3D.new()
-		var hm := SphereMesh.new()
-		hm.radius = hr
-		hm.height = hr * 0.72
-		hm.radial_segments = 14
-		hm.rings = 7
-		hill.mesh = hm
-		hill.material_override = _leaf_c
-		hill.position = Vector3(cos(a) * dist, SCENE_GROUND - hr * 0.24, sin(a) * dist)
-		hill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_scenery.add_child(hill)
-
-	# 从广场延伸出去的土路：让这里像村落的中心广场，而不是一块棋盘
-	for k in 3:
-		var a := TAU * float(k) / 3.0 + 0.9
-		var d := Vector3(cos(a), 0, sin(a))
-		var plen := 1150.0 * grow
-		var start := 1580.0 * grow
-		var road := _add_box(_scenery, Vector3(plen, 4.0, 180.0), Vector3(d.x * (start + plen * 0.5), SCENE_GROUND + 1.0, d.z * (start + plen * 0.5)), _soil, -a)
-		road.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-	# 环广场一周的树木：真实树高，站在草地上衬出广场的尺度
-	for k in 14:
-		var a := TAU * float(k) / 14.0 + rng.randf_range(-0.12, 0.12)
-		# 相机默认从 34° 方位看进来，这个方向留空，避免树挡住画面
-		if absf(wrapf(a - deg_to_rad(34.0), -PI, PI)) < 0.34:
-			continue
-		var dist := rng.randf_range(1780.0, 2400.0) * grow
-		var px := cos(a) * dist
-		var pz := sin(a) * dist
-		var th := rng.randf_range(400.0, 640.0)
-		_add_cyl(_scenery, 12.0, 22.0, th, Vector3(px, SCENE_GROUND + th * 0.5, pz), _wood, 8).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		for c in 3:
-			var cr := rng.randf_range(105.0, 168.0)
-			var leaf := MeshInstance3D.new()
-			var sm := SphereMesh.new()
-			sm.radius = cr
-			sm.height = cr * 1.55
-			sm.radial_segments = 10
-			sm.rings = 5
-			leaf.mesh = sm
-			leaf.material_override = _leaf_a if c % 2 == 0 else _leaf_b
-			leaf.position = Vector3(px + rng.randf_range(-40.0, 40.0), SCENE_GROUND + th * 0.88 + float(c) * cr * 0.58, pz + rng.randf_range(-40.0, 40.0))
-			leaf.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-			_scenery.add_child(leaf)
-
-	# 灌木与散石：给草地加些近处的细节
-	for k in 10:
-		var a := TAU * float(k) / 10.0 + 0.9
-		var dist := rng.randf_range(1740.0, 2300.0) * grow
-		var px := cos(a) * dist
-		var pz := sin(a) * dist
-		for c in 2:
-			var br := rng.randf_range(38.0, 66.0)
-			var bush := MeshInstance3D.new()
-			var bm := SphereMesh.new()
-			bm.radius = br
-			bm.height = br * 1.05
-			bm.radial_segments = 8
-			bm.rings = 4
-			bush.mesh = bm
-			bush.material_override = _leaf_b if c == 0 else _leaf_c
-			bush.position = Vector3(px + float(c) * 52.0 * cos(a), SCENE_GROUND + br * 0.4, pz + float(c) * 52.0 * sin(a))
-			bush.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-			_scenery.add_child(bush)
-	for k in 10:
-		var a := TAU * float(k) / 10.0 + 2.1
-		var dist := rng.randf_range(1740.0, 2340.0) * grow
-		var rr := rng.randf_range(30.0, 72.0)
-		var rock := _add_cyl(_scenery, rr * 0.7, rr, rr * 0.62, Vector3(cos(a) * dist, SCENE_GROUND + rr * 0.24, sin(a) * dist), _stone_dark, 6)
-		rock.rotation.y = a * 2.3
-		rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-
-	_scenery.visible = bool(THEMES[theme_id].get("nature", false))
-
-
 func _build_motes() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -1573,55 +1532,85 @@ func _build_motes() -> void:
 	add_child(_motes)
 
 
-## 主题专属环境粒子：暮色余烬 / 霜封落雪 / 熔火飞灰
+## 主题专属环境粒子：8 个场景各有一套形状与运动语言
 func _build_theme_fx() -> void:
 	_theme_kind = theme_id
 	if DisplayServer.get_name() == "headless":
 		return
-	var count := 42
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.instance_count = count
+	var count := 44
 	var mesh: Mesh
-	if theme_id == "frost":
-		var bm := BoxMesh.new()
-		bm.size = Vector3(3.4, 3.4, 3.4)
-		mesh = bm
-	elif theme_id == "ember":
-		var cm := CylinderMesh.new()
-		cm.top_radius = 0.0
-		cm.bottom_radius = 2.6
-		cm.height = 7.0
-		cm.radial_segments = 4
-		mesh = cm
-	elif theme_id == "jade":
-		var lm := BoxMesh.new()
-		lm.size = Vector3(5.0, 1.2, 3.0)
-		mesh = lm
-	elif theme_id == "void":
-		var vm := BoxMesh.new()
-		vm.size = Vector3(2.6, 2.6, 2.6)
-		mesh = vm
-	else:
-		var sm := SphereMesh.new()
-		sm.radius = 2.2
-		sm.height = 4.4
-		sm.radial_segments = 5
-		sm.rings = 3
-		mesh = sm
+	match theme_id:
+		"cozy":
+			# 树叶：薄片，边落边转
+			count = 36
+			var lm := BoxMesh.new()
+			lm.size = Vector3(7.0, 0.8, 4.0)
+			mesh = lm
+		"frost":
+			count = 48
+			var bm := BoxMesh.new()
+			bm.size = Vector3(3.4, 3.4, 3.4)
+			mesh = bm
+		"ember":
+			count = 40
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.0
+			cm.bottom_radius = 2.6
+			cm.height = 7.0
+			cm.radial_segments = 4
+			mesh = cm
+		"jade":
+			count = 34
+			var jm := BoxMesh.new()
+			jm.size = Vector3(5.0, 1.2, 3.0)
+			mesh = jm
+		"void":
+			count = 60
+			var vm := BoxMesh.new()
+			vm.size = Vector3(2.6, 2.6, 2.6)
+			mesh = vm
+		"dune":
+			# 飞沙：细长条，横向掠过
+			count = 48
+			var dm := BoxMesh.new()
+			dm.size = Vector3(52.0, 1.2, 1.2)
+			mesh = dm
+		"clock":
+			# 金色尘埃：悬浮明灭
+			count = 40
+			var cm2 := SphereMesh.new()
+			cm2.radius = 2.4
+			cm2.height = 4.8
+			cm2.radial_segments = 5
+			cm2.rings = 3
+			mesh = cm2
+		_:
+			var sm := SphereMesh.new()
+			sm.radius = 2.2
+			sm.height = 4.4
+			sm.radial_segments = 5
+			sm.rings = 3
+			mesh = sm
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	var col: Color = Color(THEMES[theme_id]["motes"])
-	if theme_id == "frost":
-		col = Color(0.82, 0.94, 1.0)
-	elif theme_id == "ember":
-		col = Color(1.0, 0.55, 0.22)
-	elif theme_id == "jade":
-		col = Color(0.62, 1.0, 0.72)
-	elif theme_id == "void":
-		col = Color(0.76, 0.66, 1.0)
+	match theme_id:
+		"cozy":
+			col = Color(0.72, 0.92, 0.52)
+		"frost":
+			col = Color(0.82, 0.94, 1.0)
+		"ember":
+			col = Color(1.0, 0.55, 0.22)
+		"jade":
+			col = Color(0.62, 1.0, 0.72)
+		"void":
+			col = Color(0.76, 0.66, 1.0)
+		"dune":
+			col = Color(1.0, 0.87, 0.62)
+		"clock":
+			col = Color(1.0, 0.83, 0.52)
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.5)
 	mat.emission_enabled = true
 	mat.emission = col
@@ -1631,17 +1620,28 @@ func _build_theme_fx() -> void:
 		(mesh as PrimitiveMesh).material = mat
 	elif mesh is ArrayMesh and (mesh as ArrayMesh).get_surface_count() > 0:
 		mesh.surface_set_material(0, mat)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.instance_count = count
 	mm.mesh = mesh
 	_theme_pts.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20261117
+	var spread := 1060.0 * _board_scale
+	if theme_id == "dune" or theme_id == "cozy":
+		spread = 2200.0 * _board_scale
+	var y_lo := 10.0
+	var y_hi := 620.0
+	if theme_id == "dune":
+		y_hi = 380.0
 	for i in count:
 		var a := rng.randf() * TAU
-		var r := sqrt(rng.randf()) * 1060.0 * _board_scale
-		var y := rng.randf_range(10.0, 620.0)
+		var r := sqrt(rng.randf()) * spread
+		var y := rng.randf_range(y_lo, y_hi)
 		var base := Vector3(cos(a) * r, y, sin(a) * r)
 		mm.set_instance_transform(i, Transform3D(Basis(), base))
-		_theme_pts.append({"pos": base, "speed": rng.randf_range(0.5, 1.5), "phase": rng.randf() * TAU})
+		_theme_pts.append({"pos": base, "speed": rng.randf_range(0.5, 1.5),
+			"phase": rng.randf() * TAU, "dir": Vector3(rng.randf_range(-1, 1), 0, rng.randf_range(-1, 1))})
 	_theme_mm = MultiMeshInstance3D.new()
 	_theme_mm.multimesh = mm
 	_theme_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1653,49 +1653,85 @@ func _animate_theme_fx(delta: float) -> void:
 		return
 	var mm: MultiMesh = _theme_mm.multimesh
 	var count := _theme_pts.size()
+	var spread := 2200.0 * _board_scale
+	var basis_extra := Basis()
 	for i in count:
 		var d: Dictionary = _theme_pts[i]
 		var p: Vector3 = d["pos"]
 		var sp: float = d["speed"]
 		var ph: float = d["phase"]
-		if _theme_kind == "frost":
-			# 落雪：缓慢下坠 + 横向摆动
-			p.y -= delta * 34.0 * sp
-			p.x += sin(_time * 0.8 + ph) * delta * 10.0
-			if p.y < 6.0:
-				p.y = 620.0
-		elif _theme_kind == "ember":
-			# 飞灰：快速上升 + 闪烁偏移
-			p.y += delta * 62.0 * sp
-			p.x += sin(_time * 2.4 + ph) * delta * 16.0
-			if p.y > 640.0:
-				p.y = 6.0
-		elif _theme_kind == "jade":
-			# 翠叶：随风飘落并打旋
-			p.y -= delta * 18.0 * sp
-			p.x += sin(_time * 0.9 + ph) * delta * 22.0
-			p.z += cos(_time * 0.7 + ph) * delta * 14.0
-			if p.y < 6.0:
-				p.y = 560.0
-		elif _theme_kind == "void":
-			# 虚空星尘：缓慢上浮 + 明灭
-			p.y += delta * 12.0 * sp
-			p.x += sin(_time * 0.4 + ph) * delta * 8.0
-			if p.y > 640.0:
-				p.y = 8.0
-		else:
-			# 暮色余烬：缓慢上升 + 盘旋
-			p.y += delta * 16.0 * sp
-			p.x += sin(_time * 0.5 + ph) * delta * 6.0
-			if p.y > 620.0:
-				p.y = 8.0
+		match _theme_kind:
+			"cozy":
+				# 落叶：慢速下坠 + 左右打旋
+				p.y -= delta * 22.0 * sp
+				p.x += sin(_time * 0.7 + ph) * delta * 24.0
+				p.z += cos(_time * 0.5 + ph) * delta * 16.0
+				if p.y < 6.0:
+					p.y = 560.0
+			"frost":
+				# 落雪：缓慢下坠 + 横向摆动
+				p.y -= delta * 34.0 * sp
+				p.x += sin(_time * 0.8 + ph) * delta * 10.0
+				if p.y < 6.0:
+					p.y = 620.0
+			"ember":
+				# 飞灰：快速上升 + 闪烁偏移
+				p.y += delta * 62.0 * sp
+				p.x += sin(_time * 2.4 + ph) * delta * 16.0
+				if p.y > 640.0:
+					p.y = 6.0
+			"jade":
+				# 翠叶：随风飘落并打旋
+				p.y -= delta * 18.0 * sp
+				p.x += sin(_time * 0.9 + ph) * delta * 22.0
+				p.z += cos(_time * 0.7 + ph) * delta * 14.0
+				if p.y < 6.0:
+					p.y = 560.0
+			"void":
+				# 虚空星尘：缓慢上浮 + 明灭
+				p.y += delta * 12.0 * sp
+				p.x += sin(_time * 0.4 + ph) * delta * 8.0
+				if p.y > 640.0:
+					p.y = 8.0
+			"dune":
+				# 飞沙：横向掠过棋盘上空，越界后从另一侧回来
+				p.x += delta * 240.0 * sp
+				p.z += delta * 46.0 * sp
+				p.y += sin(_time * 1.1 + ph) * delta * 6.0
+				if p.x > spread:
+					p.x = -spread
+					p.z = (ph / TAU * 2.0 - 1.0) * spread * 0.7
+			"clock":
+				# 金色尘埃：缓慢上浮，灯下打转
+				p.y += delta * 9.0 * sp
+				p.x += sin(_time * 0.6 + ph) * delta * 10.0
+				p.z += cos(_time * 0.4 + ph) * delta * 8.0
+				if p.y > 620.0:
+					p.y = 12.0
+			_:
+				# 暮色余烬：缓慢上升 + 盘旋
+				p.y += delta * 16.0 * sp
+				p.x += sin(_time * 0.5 + ph) * delta * 6.0
+				if p.y > 620.0:
+					p.y = 8.0
 		d["pos"] = p
 		var s := 1.0
-		if _theme_kind == "ember":
-			s = 0.7 + 0.5 * absf(sin(_time * 3.0 + ph))
-		elif _theme_kind == "void":
-			s = 0.5 + 0.7 * absf(sin(_time * 1.7 + ph))
-		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(s, s, s)), p))
+		match _theme_kind:
+			"ember":
+				s = 0.7 + 0.5 * absf(sin(_time * 3.0 + ph))
+			"void":
+				s = 0.5 + 0.7 * absf(sin(_time * 1.7 + ph))
+			"clock":
+				s = 0.6 + 0.6 * absf(sin(_time * 1.3 + ph))
+			"jade":
+				s = 0.85 + 0.3 * absf(sin(_time * 2.1 + ph))
+		if _theme_kind == "cozy" or _theme_kind == "jade":
+			# 叶片自身翻转，避免看起来像静止的薄片
+			basis_extra = Basis().rotated(Vector3.UP, _time * 0.9 + ph) \
+				.rotated(Vector3.RIGHT, sin(_time * 1.3 + ph) * 0.9)
+		else:
+			basis_extra = Basis()
+		mm.set_instance_transform(i, Transform3D(basis_extra.scaled(Vector3(s, s, s)), p))
 
 
 # ---------------------------------------------------------------- 棋子
@@ -2089,7 +2125,7 @@ func piece_celebrate(node: Node3D) -> void:
 
 
 ## 吃棋：蓄力 → 跃起 → 滞空 → 砸落 → 踩扁 → 溅开 → 收势（七阶段，tween 合计约 1.72s）
-func capture_stomp(attacker: Node3D, victim: Node3D, color: Color) -> void:
+func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Callable()) -> void:
 	if attacker == null or not is_instance_valid(attacker):
 		return
 	var a := _actor_of(attacker)
@@ -2148,6 +2184,13 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color) -> void:
 	await fall.finished
 	fx_sound("cap_slam")
 	impact(Vector3(vpos.x, TILE_TOP, vpos.z), color)
+	# 命中帧：此刻才允许写入游戏状态（Main 通过 on_hit 回调执行），视觉先行
+	hit_flash(attacker)
+	scene_impact(vpos, color)
+	if has_victim and is_instance_valid(victim):
+		hit_flash(victim)
+	if on_hit.is_valid():
+		on_hit.call()
 	# 5. 踩扁 0.10s：目标瞬间压成一张薄片
 	fx_sound("cap_squash")
 	var squash := create_tween()
@@ -2183,6 +2226,80 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color) -> void:
 	if has_victim and is_instance_valid(victim):
 		victim.scale = Vector3.ONE
 		victim.rotation = Vector3.ZERO
+
+
+## 命中白闪：一记砸中时，双方周身炸开一圈纯白亮壳（纯视觉，不动材质）
+func hit_flash(node: Node3D, radius := 76.0) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	sm.radial_segments = 16
+	sm.rings = 8
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1, 1, 1, 0.8)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.mesh = sm
+	mi.material_override = mat
+	mi.position = node.position + Vector3(0, 54.0, 0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fx.add_child(mi)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(mi, "scale", Vector3.ONE * 1.85, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(mat, "albedo_color:a", 0.0, 0.15)
+	t.chain().tween_callback(mi.queue_free)
+
+
+## 残魂：被吃棋子化成一枚同色光点，沿弧线飞回自己的基地（纯视觉）
+func piece_soul(from: Vector3, to: Vector3, color: Color) -> void:
+	var start := from + Vector3(0, 46.0, 0)
+	var end := to + Vector3(0, 46.0, 0)
+	_fx_dome(start, color, 54.0, 0.30)
+	orb_fly(start, end, color, "spark", 0.55)
+	var t := create_tween()
+	t.tween_interval(0.55)
+	t.tween_callback(func() -> void:
+		pulse(end, color)
+		_fx_shards(end, color.lightened(0.25), 6, 42.0, 56.0, 5.0, 0.4))
+
+
+## 场景专属的破碎层：同一记砸落，在 8 个场景里换碎屑材质与颜色
+func scene_impact(pos: Vector3, color: Color) -> void:
+	var g := Vector3(pos.x, TILE_TOP + 2.0, pos.z)
+	match _scene_id:
+		"cozy":
+			_fx_shards(g, Color("6fae4e"), 12, 88.0, 110.0, 7.0, 0.62)
+			_fx_fire_puffs(g, Color("d8c8a0"), 4)
+		"dusk":
+			_fx_dome(g, Color("ffd9c0"), 72.0, 0.42)
+			_fx_fire_puffs(g, Color("ffcfd8"), 5)
+		"frost":
+			_fx_shards(g, Color("dff2ff"), 16, 96.0, 132.0, 8.0, 0.64)
+			_fx_spikes(g, Color("bfe8ff"), 6, 42.0, 54.0)
+		"ember":
+			_fx_fire_puffs(g, Color("ff8a3c"), 7)
+			_fx_shards(g, Color("ffcf8a"), 12, 96.0, 130.0, 6.0, 0.6)
+		"jade":
+			_fx_shards(g, Color("8ff0b0"), 14, 92.0, 122.0, 7.0, 0.62)
+			_fx_fire_puffs(g, Color("c8f0d8"), 4)
+		"void":
+			_fx_shards(g, Color("c8b8ff"), 14, 100.0, 140.0, 7.0, 0.64)
+			_fx_dome(g, Color("7a5cff"), 82.0, 0.42)
+		"dune":
+			_fx_fire_puffs(g, Color("e8cc96"), 6)
+			_fx_shards(g, Color("d8b87a"), 12, 90.0, 104.0, 6.0, 0.62)
+		"clock":
+			_fx_shards(g, Color("ffd28a"), 14, 92.0, 122.0, 6.0, 0.62)
+			_fx_fire_puffs(g, Color("ffca80"), 4)
+		_:
+			_fx_shards(g, color.lightened(0.2), 10, 90.0, 112.0, 6.0, 0.6)
+	decal_scorch(Vector3(pos.x, TILE_TOP + 0.6, pos.z))
 
 
 # ---------------------------------------------------------------- 道具演出原语
@@ -2493,6 +2610,31 @@ func impact_kind(kind: String, pos: Vector3, color: Color) -> void:
 		_:
 			impact(pos, color)
 			_fx_shards(g, color, 10, 68.0, 82.0, 5.0, 0.42)
+	# 命中处飞起本场景的碎屑：同一记道具效果在 8 个场景里手感各不相同
+	_scene_dust(g, color)
+
+
+## 轻量场景碎屑：不写地面焦痕，只给命中点补一层本地材质
+func _scene_dust(g: Vector3, color: Color) -> void:
+	match _scene_id:
+		"cozy":
+			_fx_shards(g, Color("6fae4e"), 5, 60.0, 70.0, 5.0, 0.4)
+		"dusk":
+			_fx_fire_puffs(g, Color("ffcfd8"), 2)
+		"frost":
+			_fx_shards(g, Color("dff2ff"), 6, 66.0, 80.0, 5.0, 0.42)
+		"ember":
+			_fx_fire_puffs(g, Color("ff8a3c"), 2)
+		"jade":
+			_fx_shards(g, Color("8ff0b0"), 5, 60.0, 70.0, 5.0, 0.4)
+		"void":
+			_fx_shards(g, Color("c8b8ff"), 6, 70.0, 84.0, 5.0, 0.42)
+		"dune":
+			_fx_fire_puffs(g, Color("e8cc96"), 2)
+		"clock":
+			_fx_shards(g, Color("ffd28a"), 5, 60.0, 70.0, 4.0, 0.4)
+		_:
+			_fx_shards(g, color.lightened(0.15), 5, 58.0, 66.0, 5.0, 0.4)
 
 
 ## 施法者手心连向目标的一条逐渐绷直的细光束，结束后自动淡出释放
@@ -4375,6 +4517,10 @@ func theme_accent() -> Color:
 			return Color("8ff0c0")
 		"void":
 			return Color("b8a0ff")
+		"dune":
+			return Color("ffcf7a")
+		"clock":
+			return Color("ffbe66")
 		_:
 			return Color("ffd166")
 

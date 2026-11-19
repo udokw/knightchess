@@ -80,8 +80,9 @@ const THEME_EVENT := {
 	"jade": "jadeserpent", "void": "voidrift", "cozy": "goldrain",
 }
 const THEME_LABELS := {
-	"dusk": "暮色竞技场", "frost": "霜封荒原", "ember": "熔火深渊",
-	"jade": "翠玉遗迹", "void": "虚空星海", "cozy": "晴日草地",
+	"dusk": "暮色浮岛", "frost": "霜封冰湖", "ember": "熔火裂谷",
+	"jade": "翠玉雨林", "void": "虚空星海", "cozy": "晴日牧野",
+	"dune": "沙海神庙", "clock": "齿轮高塔",
 }
 
 var base_points: Dictionary = {}
@@ -1665,22 +1666,27 @@ func _resolve_capture(p: Dictionary, from_cell := -1) -> bool:
 			arena.fx_sound("cap_block")
 			continue
 		var pos: Vector3 = q["node"].position
-		q["cell"] = -1
-		q["lane"] = -1
-		q["lslot"] = 0
-		q["finished"] = false
+		var home: Vector3 = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
 		# 慢动作踩爆：整段过程把时间放慢，读得清跳跃、滞空与压扁（音效由 capture_stomp 内部按阶段播放）
 		Engine.time_scale = 0.65
-		await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]])
+		# 命中帧才写游戏状态：闪白、震屏、战报、残魂全部在砸中那一瞬发生
+		var on_hit := func() -> void:
+			q["cell"] = -1
+			q["lane"] = -1
+			q["lslot"] = 0
+			q["finished"] = false
+			captures[p["team"]] += 1
+			hud.screen_flash(Color(1, 1, 1), 0.18)
+			hud.screen_flash(TEAM_COLORS[p["team"]], 0.26)
+			_shake(0.30, 18.0)
+			arena.piece_soul(pos, home, TEAM_COLORS[q["team"]])
+			_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
+		await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]], on_hit)
 		Engine.time_scale = BASE_TIME_SCALE
-		q["node"].position = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
+		q["node"].position = home
 		q["node"].scale = Vector3.ONE
 		q["node"].rotation = Vector3.ZERO
 		q["node"].visible = true
-		hud.screen_flash(TEAM_COLORS[p["team"]], 0.26)
-		_shake(0.30, 18.0)
-		captures[p["team"]] += 1
-		_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
 		# 吃子奖励：抽一张道具卡
 		if cards[p["team"]].size() < 4:
 			_draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))

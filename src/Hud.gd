@@ -36,9 +36,9 @@ const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
 const DIM := Color("98a3b8")
 
-const THEME_IDS := ["cozy", "dusk", "frost", "ember", "jade", "void"]
-const THEME_NAMES := ["晴日草地", "暮色竞技场", "霜封荒原", "熔火深渊", "翠玉遗迹", "虚空星海"]
-const THEME_SHORT := ["晴日", "暮色", "霜封", "熔火", "翠玉", "虚空"]
+const THEME_IDS := ["cozy", "dusk", "frost", "ember", "jade", "void", "dune", "clock"]
+const THEME_NAMES := ["晴日牧野", "暮色浮岛", "霜封冰湖", "熔火裂谷", "翠玉雨林", "虚空星海", "沙海神庙", "齿轮高塔"]
+const THEME_SHORT := ["晴日", "暮色", "霜封", "熔火", "翠玉", "虚空", "沙海", "齿轮"]
 
 const ITEM_INFO := {
 	"boost": ["加速", "+2 点数", Color("ff9a3c")],
@@ -433,7 +433,7 @@ func _build_menu() -> void:
 	vb.add_child(_spacer(4))
 	vb.add_child(_label("棋盘主题", 12, Color(1, 1, 1, 0.42)))
 	_theme_row = GridContainer.new()
-	_theme_row.columns = 3
+	_theme_row.columns = 4
 	_theme_row.add_theme_constant_override("h_separation", 5)
 	_theme_row.add_theme_constant_override("v_separation", 5)
 	vb.add_child(_theme_row)
@@ -1339,12 +1339,14 @@ func _build_start() -> void:
 		level_row.add_child(b2)
 		_level_buttons.append(b2)
 
-	vb.add_child(_label("棋盘主题（5 套主题 · 各自独占道具与事件）", 13, DIM))
-	var theme_row := HBoxContainer.new()
-	theme_row.add_theme_constant_override("separation", 8)
+	vb.add_child(_label("棋盘场景（8 个独立场景 · 地形与光照各不相同）", 13, DIM))
+	var theme_row := GridContainer.new()
+	theme_row.columns = 4
+	theme_row.add_theme_constant_override("h_separation", 8)
+	theme_row.add_theme_constant_override("v_separation", 8)
 	vb.add_child(theme_row)
 	for i in THEME_IDS.size():
-		var b3 := _btn(THEME_NAMES[i], Vector2(0, 40), 13)
+		var b3 := _btn(THEME_NAMES[i], Vector2(0, 38), 12)
 		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var tid: String = THEME_IDS[i]
 		b3.pressed.connect(func(): _select_theme(tid))
@@ -1615,7 +1617,7 @@ func _build_settings() -> void:
 	vb.add_child(_spacer(4))
 	vb.add_child(_label("默认棋盘主题", 13, DIM))
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 8)
 	grid.add_theme_constant_override("v_separation", 6)
 	vb.add_child(grid)

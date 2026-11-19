@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 C · 晴日草地棋盘</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sand:#FFF8E9;
+  --sand-2:#F7E9C6;
+  --t1:#EE7A5F;
+  --t2:#56B4D3;
+  --t3:#7CBE7C;
+  --t4:#F0B94A;
+  --ink:#3C4A3F;
+  --ink-soft:rgba(60,74,63,.62);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"Quicksand","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--ink);
+  background:linear-gradient(184deg,#CBE9F1 0%,#DFF2F0 40%,#EDF7E4 70%,#E5F3D6 100%);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+}
+.scene{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+.sun{position:absolute;left:52%;top:-260px;width:900px;height:900px;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,247,214,.85),rgba(255,247,214,0) 62%)}
+.hill{position:absolute;border-radius:50%;filter:blur(2px)}
+.hill.a{left:-240px;bottom:-360px;width:1100px;height:640px;background:#BCDC9E;opacity:.75}
+.hill.b{right:-300px;bottom:-420px;width:1200px;height:700px;background:#A8D08C;opacity:.7}
+.hill.c{left:180px;bottom:-300px;width:900px;height:520px;background:#CBE6AE;opacity:.8}
+.cloud{position:absolute;background:#fff;border-radius:999px;filter:blur(1px);opacity:.72}
+.cloud::before,.cloud::after{content:"";position:absolute;background:#fff;border-radius:50%}
+.c1{left:90px;top:110px;width:190px;height:48px}
+.c1::before{width:78px;height:78px;left:26px;top:-34px}
+.c1::after{width:56px;height:56px;left:104px;top:-22px}
+.c2{right:520px;top:70px;width:150px;height:38px;opacity:.55}
+.c2::before{width:62px;height:62px;left:22px;top:-28px}
+.c2::after{width:46px;height:46px;left:82px;top:-18px}
+.shell{position:relative;display:flex;width:1440px;height:900px;z-index:2}
+.stage{position:relative;width:1010px;height:900px;display:flex;align-items:center;justify-content:center}
+.board{position:relative;width:900px;height:900px}
+/* 水塘光圈 */
+.pond{
+  position:absolute;left:2px;top:2px;width:896px;height:896px;border-radius:96px;
+  background:radial-gradient(circle at 46% 40%, #D6EFE8 0%, #BFE4DC 60%, #A8D8D0 100%);
+  box-shadow:0 26px 50px rgba(70,116,96,.22), inset 0 -10px 24px rgba(96,150,132,.20);
+}
+.pond::after{
+  content:"";position:absolute;inset:13px;border-radius:84px;
+  border:2px solid rgba(255,255,255,.55);
+}
+.plate{
+  position:absolute;left:15px;top:15px;width:870px;height:870px;
+  border-radius:76px 64px 82px 68px;
+  background:radial-gradient(66% 58% at 36% 24%, #FFFDF5 0%, var(--sand) 46%, var(--sand-2) 100%);
+  border:8px solid #FFFDF7;
+  box-shadow:0 18px 34px rgba(96,138,110,.26), inset 0 -10px 22px rgba(214,190,140,.28), inset 0 2px 0 #fff;
+}
+.plate::after{
+  content:"";position:absolute;inset:22px;border-radius:60px 50px 66px 54px;
+  border:1.5px solid rgba(212,188,140,.5);
+}
+#ring,#lanes,#bases,#center{position:absolute;inset:0}
+.pad{
+  position:absolute;width:42px;height:42px;margin:-21px 0 0 -21px;border-radius:50%;
+  background:radial-gradient(58% 54% at 38% 28%, #FFFFFF 0%, #FEF7E6 52%, #F2E2BE 100%);
+  box-shadow:0 3px 6px rgba(150,124,80,.22), inset 0 -2px 4px rgba(206,180,132,.34);
+}
+.pad .chev{
+  position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;
+  border-top:1.6px solid rgba(150,124,80,.42);
+  border-right:1.6px solid rgba(150,124,80,.42);
+  transform:translateY(-9px) rotate(calc(var(--rot) + 45deg));
+}
+.pad.s1{background:radial-gradient(58% 54% at 38% 28%, #FFE6DE 0%, #F9C9BA 55%, #EBA893 100%)}
+.pad.s2{background:radial-gradient(58% 54% at 38% 28%, #DFF2F8 0%, #B8DFEB 55%, #93C8DA 100%)}
+.pad.s3{background:radial-gradient(58% 54% at 38% 28%, #E6F5DE 0%, #C2E2B4 55%, #A2CE92 100%)}
+.pad.s4{background:radial-gradient(58% 54% at 38% 28%, #FFF3D6 0%, #F7DFA2 55%, #E7C673 100%)}
+.tag{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center}
+.tag.item{
+  width:20px;height:20px;border-radius:6px;transform:translate(-50%,-50%) rotate(45deg);
+  background:linear-gradient(150deg,#FFD98A,#F0AE4C);
+  box-shadow:0 2px 4px rgba(170,120,40,.35), inset 0 1px 0 rgba(255,255,255,.8);
+}
+.tag.event{
+  width:22px;height:22px;border-radius:50%;background:#FFFDF4;
+  border:2px solid var(--t1);color:var(--t1);font-size:12px;font-weight:700;
+  box-shadow:0 2px 4px rgba(160,110,90,.25);
+}
+.tag.portal{
+  width:24px;height:24px;border-radius:50%;
+  background:radial-gradient(circle at 50% 50%, #FFFFFF 0 30%, #9FE0D2 32% 70%, #63BFAE 72% 100%);
+  box-shadow:0 2px 5px rgba(70,150,134,.3);
+}
+.piece{
+  position:absolute;left:50%;top:50%;width:32px;height:32px;margin:-16px 0 0 -16px;border-radius:50%;
+  background:radial-gradient(62% 58% at 34% 24%, #FFFFFF 0%, var(--c) 46%, color-mix(in srgb, var(--c) 70%, #6B5A3C) 100%);
+  box-shadow:0 5px 9px rgba(90,110,80,.32), 0 1px 0 rgba(255,255,255,.7) inset;
+}
+.piece::after{
+  content:"";position:absolute;left:9px;top:6px;width:8px;height:6px;border-radius:50%;
+  background:rgba(255,255,255,.8);filter:blur(.5px);
+}
+.piece.on-ring{width:28px;height:28px;margin:-14px 0 0 -14px;z-index:3}
+.p1{--c:var(--t1)} .p2{--c:var(--t2)} .p3{--c:var(--t3)} .p4{--c:var(--t4)}
+.mat{
+  position:absolute;width:142px;height:142px;margin:-71px 0 0 -71px;border-radius:24px;
+  display:grid;grid-template-columns:1fr 1fr;place-items:center;padding:18px;
+  box-shadow:0 12px 22px rgba(96,128,96,.24), inset 0 3px 0 rgba(255,255,255,.5);
+}
+.mat.m1{background:linear-gradient(152deg,#FFC7B6,#F49E86)}
+.mat.m2{background:linear-gradient(152deg,#BFE8F3,#8FD0E3)}
+.mat.m3{background:linear-gradient(152deg,#CFEBC0,#A4D492)}
+.mat.m4{background:linear-gradient(152deg,#FFE6AC,#F5C86C)}
+.mat .piece{position:relative;left:auto;top:auto;margin:0}
+.matlabel{
+  position:absolute;bottom:-28px;left:50%;transform:translateX(-50%);
+  font-size:11.5px;font-weight:600;letter-spacing:.14em;color:var(--ink-soft);white-space:nowrap;
+}
+.center-plat{
+  position:absolute;left:450px;top:450px;width:150px;height:150px;margin:-75px 0 0 -75px;border-radius:50%;
+  background:radial-gradient(62% 56% at 34% 24%, #FFFDF6, #F8EDD4 62%, #E9D5AC 100%);
+  border:3px solid #FFFDF8;
+  box-shadow:0 8px 18px rgba(140,120,80,.26), inset 0 -6px 12px rgba(214,190,140,.3);
+}
+.center-plat::before{
+  content:"";position:absolute;inset:20px;border-radius:50%;
+  background:radial-gradient(circle at 38% 30%, #FFF6DC, #EFCB84);
+  box-shadow:inset 0 -4px 10px rgba(190,150,80,.4);
+}
+.orb{
+  position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;
+  background:radial-gradient(circle at 34% 26%, #FFFFFF, #FFD98A 42%, #F0A94A 100%);
+  box-shadow:0 6px 12px rgba(180,130,50,.4), inset 0 -3px 8px rgba(190,130,40,.4);
+}
+.die{
+  position:absolute;left:450px;top:808px;width:62px;height:62px;margin-left:-31px;border-radius:14px;
+  background:linear-gradient(156deg,#FFFDF6,#FBF0D8 72%,#EEDCB8);
+  box-shadow:0 10px 18px rgba(120,110,70,.3), inset 0 2px 0 #fff;
+  transform:rotate(-8deg);
+}
+.die .pip{position:absolute;width:8px;height:8px;border-radius:50%;background:#7A6A4C}
+/* 面板 */
+.panel{
+  position:relative;width:430px;height:900px;padding:64px 52px 54px 46px;display:flex;flex-direction:column;
+  background:linear-gradient(180deg, rgba(255,253,246,.86), rgba(255,249,236,.62));
+  backdrop-filter:blur(6px);
+  border-left:1px solid rgba(255,255,255,.85);
+  box-shadow:-20px 0 50px rgba(120,150,120,.12);
+}
+.chip{
+  display:inline-flex;align-items:center;gap:10px;align-self:flex-start;
+  font-size:11px;letter-spacing:.22em;padding:7px 14px;border-radius:999px;
+  background:#FFFDF7;box-shadow:0 4px 10px rgba(120,140,110,.16);color:var(--ink-soft);
+}
+.chip b{font-weight:700;color:var(--ink)}
+h1{margin-top:38px;font-family:"Newsreader","Quicksand",serif;font-size:56px;line-height:1.06;font-weight:500;letter-spacing:.01em}
+.en{margin-top:14px;font-size:11px;letter-spacing:.32em;color:var(--ink-soft);text-transform:uppercase}
+.tagline{margin-top:24px;font-size:16px;line-height:1.78;color:rgba(60,74,63,.78)}
+.rule{height:1px;background:rgba(60,74,63,.12);margin:30px 0}
+.swatches{display:flex;gap:9px}
+.sw{flex:1}
+.sw .box{height:54px;border-radius:14px;box-shadow:0 5px 12px rgba(110,130,100,.20), inset 0 1px 0 rgba(255,255,255,.7)}
+.sw .code{margin-top:8px;font-size:10px;letter-spacing:.05em;color:var(--ink-soft)}
+.spec{display:flex;flex-direction:column;gap:14px}
+.row{display:grid;grid-template-columns:78px 1fr;gap:14px}
+.row dt{font-size:10px;letter-spacing:.14em;color:rgba(60,74,63,.45);padding-top:3px}
+.row dd{font-size:13.5px;line-height:1.62;color:rgba(60,74,63,.86)}
+.foot{margin-top:auto;padding-top:20px;border-top:1px solid rgba(60,74,63,.12);font-size:11.5px;line-height:1.75;color:rgba(60,74,63,.46)}
+</style>
+</head>
+<body>
+<div class="scene">
+  <div class="sun"></div>
+  <div class="cloud c1"></div>
+  <div class="cloud c2"></div>
+  <div class="hill a"></div>
+  <div class="hill b"></div>
+  <div class="hill c"></div>
+</div>
+
+<div class="shell">
+  <div class="stage">
+    <div class="board">
+      <div class="pond"></div>
+      <div class="plate"></div>
+      <div id="lanes"></div>
+      <div id="ring"></div>
+      <div id="bases"></div>
+      <div id="center"></div>
+      <div class="die">
+        <div class="pip" style="left:14px;top:14px"></div>
+        <div class="pip" style="left:44px;top:14px"></div>
+        <div class="pip" style="left:29px;top:29px"></div>
+        <div class="pip" style="left:14px;top:44px"></div>
+        <div class="pip" style="left:44px;top:44px"></div>
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <div class="chip"><b>C</b><span>方向 三 / 三</span></div>
+    <h1>晴日草地</h1>
+    <div class="en">Sunny Meadow</div>
+    <p class="tagline">浅池塘 · 暖砂岛 · 糖果棋子<br>最"随手玩一局"的方向，轻松、明亮，但不刺眼。</p>
+
+    <div class="rule"></div>
+    <div class="swatches">
+      <div class="sw"><div class="box" style="background:#CBE9F1"></div><div class="code">#CBE9F1</div></div>
+      <div class="sw"><div class="box" style="background:#FFF8E9"></div><div class="code">#FFF8E9</div></div>
+      <div class="sw"><div class="box" style="background:#EE7A5F"></div><div class="code">#EE7A5F</div></div>
+      <div class="sw"><div class="box" style="background:#7CBE7C"></div><div class="code">#7CBE7C</div></div>
+      <div class="sw"><div class="box" style="background:#F0B94A"></div><div class="code">#F0B94A</div></div>
+    </div>
+
+    <div class="rule"></div>
+    <dl class="spec">
+      <div class="row"><dt>天空 / 光照</dt><dd>晴空渐变 + 远山薄雾，单一日光；粒子只保留极少量浮尘</dd></div>
+      <div class="row"><dt>棋盘</dt><dd>暖砂岛 + 白色厚边，岛外一圈浅水；格位低对比，让棋子跳出来</dd></div>
+      <div class="row"><dt>棋子</dt><dd>圆润糖豆造型，顶部高光、底部软影，队色柔和但辨识度高</dd></div>
+      <div class="row"><dt>道具 / 事件</dt><dd>金色菱形、珊瑚问号、薄荷传送环，颜色区分且不发光</dd></div>
+      <div class="row"><dt>气质</dt><dd>松弛、明快、治愈向；适合碎片时间玩几局</dd></div>
+    </dl>
+
+    <div class="foot">
+      引擎落地：天空改浅青→米白渐变、环境光提高、glow 0.05、雾 0.15；台面改暖砂色高粗糙度，去掉金属与自发光描边。
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  const C=450, R=294, N=40;
+  const START=[0,10,20,30];
+  const ITEM=[6,16,26,36];
+  const EVENT=[9,29];
+  const PORTAL=[19];
+  const ONRING=[3,12,23,33];
+  const ringEl=document.getElementById('ring');
+  const lanesEl=document.getElementById('lanes');
+  const basesEl=document.getElementById('bases');
+  const centerEl=document.getElementById('center');
+  function P(r,deg){const a=deg*Math.PI/180;return [C+Math.cos(a)*r, C+Math.sin(a)*r];}
+
+  for(let i=0;i<N;i++){
+    const deg=-90+i*360/N, p=P(R,deg);
+    const el=document.createElement('div');
+    el.className='pad';
+    el.style.left=p[0]+'px'; el.style.top=p[1]+'px';
+    el.style.setProperty('--rot',deg+'deg');
+    const ch=document.createElement('div'); ch.className='chev'; el.appendChild(ch);
+    const si=START.indexOf(i);
+    if(si>=0){el.classList.add('s'+(si+1));}
+    if(ITEM.includes(i)){
+      const t=document.createElement('div'); t.className='tag item'; el.appendChild(t);
+    } else if(EVENT.includes(i)){
+      const t=document.createElement('div'); t.className='tag event'; t.textContent='?'; el.appendChild(t);
+    } else if(PORTAL.includes(i)){
+      const t=document.createElement('div'); t.className='tag portal'; el.appendChild(t);
+    }
+    const op=ONRING.indexOf(i);
+    if(op>=0){
+      const pc=document.createElement('div'); pc.className='piece on-ring p'+(op+1); el.appendChild(pc);
+    }
+    ringEl.appendChild(el);
+  }
+
+  [45,135,225,315].forEach(function(d){
+    [200,140].forEach(function(r){
+      const p=P(r,d);
+      const el=document.createElement('div');
+      el.className='pad';
+      el.style.left=p[0]+'px'; el.style.top=p[1]+'px';
+      el.style.setProperty('--rot',(d+180)+'deg');
+      const ch=document.createElement('div'); ch.className='chev'; el.appendChild(ch);
+      lanesEl.appendChild(el);
+    });
+  });
+
+  [[-1,-1,1],[1,-1,2],[1,1,3],[-1,1,4]].forEach(function(c){
+    const m=document.createElement('div');
+    m.className='mat m'+c[2];
+    m.style.left=(C+c[0]*318)+'px'; m.style.top=(C+c[1]*318)+'px';
+    for(let k=0;k<4;k++){
+      const pc=document.createElement('div'); pc.className='piece p'+c[2]; m.appendChild(pc);
+    }
+    const lb=document.createElement('span'); lb.className='matlabel';
+    lb.textContent=(c[2]===1?'红队':c[2]===2?'蓝队':c[2]===3?'绿队':'黄队');
+    m.appendChild(lb);
+    basesEl.appendChild(m);
+  });
+
+  const plat=document.createElement('div'); plat.className='center-plat';
+  const orb=document.createElement('div'); orb.className='orb'; plat.appendChild(orb);
+  centerEl.appendChild(plat);
+})();
+</script>
+</body>
+</html>

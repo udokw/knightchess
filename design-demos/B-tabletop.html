@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 B · 木桌俱乐部棋盘</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;900&family=Marcellus&display=swap" rel="stylesheet">
+<style>
+:root{
+  --wood:#4E3322;
+  --cream:#FBF3E0;
+  --cream-2:#EFE0BE;
+  --brass:#B8904C;
+  --brass-dark:#7C5C28;
+  --ink:#3B2A1A;
+  --t1:#A9453C;
+  --t2:#3B6382;
+  --t3:#4E7A55;
+  --t4:#B08534;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"Nunito","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--ink);
+  background:
+    radial-gradient(120% 90% at 18% 8%, rgba(255,226,178,.22), transparent 62%),
+    radial-gradient(90% 70% at 88% 100%, rgba(0,0,0,.42), transparent 70%),
+    repeating-linear-gradient(91deg,
+      rgba(255,255,255,.030) 0px, rgba(255,255,255,.030) 2px,
+      rgba(0,0,0,.045) 3px, rgba(0,0,0,.045) 7px,
+      rgba(255,255,255,.018) 8px, rgba(255,255,255,.018) 9px),
+    linear-gradient(168deg,#5B3D28 0%,#4A3020 48%,#3A2517 100%);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.shell{display:flex;width:1440px;height:900px}
+.stage{position:relative;width:1010px;height:900px;display:flex;align-items:center;justify-content:center}
+.board{position:relative;width:900px;height:900px}
+/* 石盘：厚边、暖白、柔光 */
+.plate{
+  position:absolute;left:12px;top:12px;width:876px;height:876px;border-radius:62px;
+  background:
+    radial-gradient(72% 62% at 34% 22%, #FFFCF2 0%, #FBF3DF 42%, #F0E2C2 74%, #E4D2AA 100%);
+  box-shadow:
+    0 0 0 7px var(--brass),
+    0 0 0 9px var(--brass-dark),
+    0 26px 52px rgba(0,0,0,.52),
+    0 6px 14px rgba(0,0,0,.35),
+    inset 0 4px 0 rgba(255,255,255,.75),
+    inset 0 -16px 34px rgba(150,116,58,.30);
+}
+.plate::after{
+  content:"";position:absolute;inset:26px;border-radius:44px;
+  box-shadow:inset 0 0 0 1.5px rgba(150,116,58,.30), inset 0 10px 26px rgba(150,116,58,.12);
+}
+#ring,#lanes,#bases,#center{position:absolute;inset:0}
+.pad{
+  position:absolute;width:42px;height:42px;margin:-21px 0 0 -21px;border-radius:50%;
+  background:radial-gradient(62% 58% at 36% 26%, #FFFDF4, #F8EFD8 58%, #EBDCBA 100%);
+  box-shadow:
+    0 2px 4px rgba(92,64,30,.30),
+    0 5px 8px rgba(60,40,16,.16),
+    inset 0 2px 2px #FFFDF6,
+    inset 0 -3px 5px rgba(158,126,74,.30);
+  border:1px solid rgba(158,126,74,.30);
+}
+.pad .chev{
+  position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;
+  border-top:1.6px solid rgba(122,92,46,.42);
+  border-right:1.6px solid rgba(122,92,46,.42);
+  transform:translateY(-9px) rotate(calc(var(--rot) + 45deg));
+}
+.pad.s1{background:radial-gradient(62% 58% at 36% 26%, #F6DED6, #E8BFB4 60%, #CE978A 100%)}
+.pad.s2{background:radial-gradient(62% 58% at 36% 26%, #D9E5ED, #B6CBD9 60%, #8CA9BC 100%)}
+.pad.s3{background:radial-gradient(62% 58% at 36% 26%, #DDE8D6, #BED2B7 60%, #95AE8F 100%)}
+.pad.s4{background:radial-gradient(62% 58% at 36% 26%, #F6E6C4, #E6CD9C 60%, #C8A96C 100%)}
+/* 棋盘上的木/铜棋子标记 */
+.tag{position:absolute;left:50%;top:50%;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%)}
+.tag.item{
+  width:22px;height:22px;border-radius:50%;
+  background:radial-gradient(58% 54% at 34% 26%, #F4D996, #C79A45 58%, #8E6626 100%);
+  box-shadow:0 2px 3px rgba(70,46,16,.45), inset 0 1px 1px rgba(255,246,214,.85);
+  font-size:9px;color:#5A3E12;font-weight:900;
+}
+.tag.event{
+  width:24px;height:24px;border-radius:8px;
+  background:linear-gradient(160deg,#8B5E33,#5E3B1D);
+  box-shadow:0 2px 4px rgba(50,30,8,.5), inset 0 1px 0 rgba(255,235,196,.28);
+  color:#F7E9C8;font-size:12px;font-weight:900;
+}
+.tag.portal{
+  width:24px;height:24px;border-radius:50%;
+  background:radial-gradient(circle at 50% 50%, #6E4A22 0 34%, #EADFC0 36% 62%, #A8813F 64% 100%);
+  box-shadow:0 2px 4px rgba(50,30,8,.4);
+}
+/* 棋子：车削木 + 队色围带 */
+.piece{
+  position:absolute;left:50%;top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;
+  background:
+    radial-gradient(52% 46% at 36% 26%, #FFFDF3 0%, #F3E5C8 40%, #DCC49A 78%, #B79B6C 100%);
+  box-shadow:
+    0 4px 5px rgba(52,32,10,.42),
+    0 1px 0 rgba(255,255,255,.6) inset,
+    inset 0 -5px 8px rgba(140,106,58,.35);
+}
+.piece::before{
+  content:"";position:absolute;inset:5px;border-radius:50%;
+  border:4px solid rgba(0,0,0,.001);
+  box-shadow:inset 0 0 0 4px var(--c);
+  opacity:.92;
+}
+.piece::after{
+  content:"";position:absolute;left:8px;top:6px;width:7px;height:5px;border-radius:50%;
+  background:rgba(255,255,255,.72);filter:blur(.4px);
+}
+.piece.on-ring{width:26px;height:26px;margin:-13px 0 0 -13px;z-index:3}
+.p1{--c:var(--t1)} .p2{--c:var(--t2)} .p3{--c:var(--t3)} .p4{--c:var(--t4)}
+/* 基地：毡垫 + 缝线 */
+.mat{
+  position:absolute;width:142px;height:142px;margin:-71px 0 0 -71px;border-radius:16px;
+  display:grid;grid-template-columns:1fr 1fr;place-items:center;padding:16px;
+  box-shadow:
+    0 10px 18px rgba(40,24,8,.40),
+    inset 0 2px 0 rgba(255,255,255,.28),
+    inset 0 -8px 16px rgba(0,0,0,.20);
+  outline:2px dashed rgba(255,255,255,.38);
+  outline-offset:-9px;
+}
+.mat.m1{background:linear-gradient(150deg,#B9554B,#8C3A33)}
+.mat.m2{background:linear-gradient(150deg,#46718F,#2E4F6A)}
+.mat.m3{background:linear-gradient(150deg,#5B8A63,#3E6547)}
+.mat.m4{background:linear-gradient(150deg,#C39646,#94702C)}
+.mat .piece{position:relative;left:auto;top:auto;margin:0}
+.matlabel{
+  position:absolute;bottom:-27px;left:50%;transform:translateX(-50%);
+  font-size:11px;letter-spacing:.2em;color:rgba(251,243,224,.62);white-space:nowrap;
+}
+.center-plat{
+  position:absolute;left:450px;top:450px;width:152px;height:152px;margin:-76px 0 0 -76px;border-radius:50%;
+  background:radial-gradient(64% 58% at 34% 24%, #FFFDF4, #F6EAD0 60%, #E4D2AC 100%);
+  box-shadow:0 0 0 5px var(--brass), 0 8px 18px rgba(50,32,10,.45), inset 0 3px 0 #fff;
+}
+.center-plat::before{
+  content:"";position:absolute;inset:15px;border-radius:50%;
+  background:radial-gradient(circle at 38% 30%, #C9A15A, #7C5C28 72%);
+  box-shadow:inset 0 3px 6px rgba(0,0,0,.35), 0 1px 0 rgba(255,240,200,.5);
+}
+.orb{
+  position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;
+  background:radial-gradient(circle at 36% 28%, #FFF9E6, #EBCB84 40%, #B07E22 100%);
+  box-shadow:0 4px 10px rgba(60,38,10,.5), inset 0 -4px 8px rgba(120,80,20,.5);
+}
+/* 骰子（象牙） */
+.die{
+  position:absolute;left:450px;top:798px;width:60px;height:60px;margin-left:-30px;border-radius:10px;
+  background:linear-gradient(158deg,#FFFDF4,#F0E4C6 70%,#DCC9A0);
+  box-shadow:0 10px 16px rgba(40,24,6,.5), 0 0 0 1px rgba(150,116,58,.5), inset 0 2px 0 #fff;
+  transform:rotate(-8deg);
+}
+.die .pip{position:absolute;width:8px;height:8px;border-radius:50%;background:#4A3418;box-shadow:inset 0 1px 1px rgba(0,0,0,.5)}
+/* 信息面板 */
+.panel{
+  width:430px;height:900px;padding:64px 54px 54px 46px;display:flex;flex-direction:column;
+  background:linear-gradient(180deg, rgba(255,240,210,.055), rgba(0,0,0,.10));
+  border-left:1px solid rgba(255,232,190,.16);
+  color:#F6EAD2;
+}
+.chip{
+  display:inline-flex;align-items:center;gap:10px;align-self:flex-start;
+  font-size:11px;letter-spacing:.24em;padding:7px 13px;border-radius:999px;
+  border:1px solid rgba(240,214,160,.5);color:#F0DDB4;
+}
+.chip b{font-weight:900}
+h1{margin-top:38px;font-family:"Marcellus","Nunito",serif;font-size:54px;line-height:1.08;font-weight:400;color:#FFF6E2;letter-spacing:.01em}
+.en{margin-top:14px;font-size:11px;letter-spacing:.34em;color:rgba(246,234,210,.46);text-transform:uppercase}
+.tagline{margin-top:24px;font-size:16px;line-height:1.75;color:rgba(246,234,210,.78)}
+.rule{height:1px;background:rgba(240,214,160,.22);margin:30px 0}
+.swatches{display:flex;gap:9px}
+.sw{flex:1}
+.sw .box{height:54px;border-radius:6px;box-shadow:0 4px 10px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.35)}
+.sw .code{margin-top:8px;font-size:10px;letter-spacing:.06em;color:rgba(246,234,210,.46)}
+.spec{display:flex;flex-direction:column;gap:14px}
+.row{display:grid;grid-template-columns:78px 1fr;gap:14px}
+.row dt{font-size:10px;letter-spacing:.16em;color:rgba(240,214,160,.52);padding-top:3px}
+.row dd{font-size:13.5px;line-height:1.6;color:rgba(246,234,210,.86)}
+.foot{margin-top:auto;padding-top:20px;border-top:1px solid rgba(240,214,160,.20);font-size:11.5px;line-height:1.75;color:rgba(246,234,210,.44)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="stage">
+    <div class="board">
+      <div class="plate"></div>
+      <div id="lanes"></div>
+      <div id="ring"></div>
+      <div id="bases"></div>
+      <div id="center"></div>
+      <div class="die">
+        <div class="pip" style="left:13px;top:13px"></div>
+        <div class="pip" style="left:42px;top:13px"></div>
+        <div class="pip" style="left:27px;top:27px"></div>
+        <div class="pip" style="left:13px;top:42px"></div>
+        <div class="pip" style="left:42px;top:42px"></div>
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <div class="chip"><b>B</b><span>方向 二 / 三</span></div>
+    <h1>木桌俱乐部</h1>
+    <div class="en">Tabletop Clubhouse</div>
+    <p class="tagline">暖木桌 · 象牙石盘 · 黄铜镶边<br>像周末下午摊在餐桌上的实体桌游，材质有分量但不打眼。</p>
+
+    <div class="rule"></div>
+    <div class="swatches">
+      <div class="sw"><div class="box" style="background:#4E3322"></div><div class="code">#4E3322</div></div>
+      <div class="sw"><div class="box" style="background:#FBF3E0"></div><div class="code">#FBF3E0</div></div>
+      <div class="sw"><div class="box" style="background:#B8904C"></div><div class="code">#B8904C</div></div>
+      <div class="sw"><div class="box" style="background:#A9453C"></div><div class="code">#A9453C</div></div>
+      <div class="sw"><div class="box" style="background:#3B6382"></div><div class="code">#3B6382</div></div>
+    </div>
+
+    <div class="rule"></div>
+    <dl class="spec">
+      <div class="row"><dt>天空 / 光照</dt><dd>没有天空——背景是一张有木纹的桌面，顶部柔和棚灯，长柔和投影</dd></div>
+      <div class="row"><dt>棋盘</dt><dd>象牙石台 + 黄铜圈边 + 微磨砂反光，格位是带倒角的圆饼</dd></div>
+      <div class="row"><dt>棋子</dt><dd>车削木料质感，队色做成围带而不是整颗上色，敌我靠色带识别</dd></div>
+      <div class="row"><dt>道具 / 事件</dt><dd>黄铜币、深木方牌、铜环三种材质，靠材质而非霓虹区分</dd></div>
+      <div class="row"><dt>气质</dt><dd>温暖、有触感、家庭桌游；最容易让人"坐下来玩一局"</dd></div>
+    </dl>
+
+    <div class="foot">
+      引擎落地：天空换成暖色渐变+雾归零、glow 0.05；台面材质改米白粗糙石、加铜色环；格位用 bevel 圆饼网格；主光从顶侧打，阴影软。
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  const C=450, R=294, N=40;
+  const START=[0,10,20,30];
+  const ITEM=[6,16,26,36];
+  const EVENT=[9,29];
+  const PORTAL=[19];
+  const ONRING=[3,12,23,33];
+  const ringEl=document.getElementById('ring');
+  const lanesEl=document.getElementById('lanes');
+  const basesEl=document.getElementById('bases');
+  const centerEl=document.getElementById('center');
+  function P(r,deg){const a=deg*Math.PI/180;return [C+Math.cos(a)*r, C+Math.sin(a)*r];}
+
+  for(let i=0;i<N;i++){
+    const deg=-90+i*360/N, p=P(R,deg);
+    const el=document.createElement('div');
+    el.className='pad';
+    el.style.left=p[0]+'px'; el.style.top=p[1]+'px';
+    el.style.setProperty('--rot',deg+'deg');
+    const ch=document.createElement('div'); ch.className='chev'; el.appendChild(ch);
+    const si=START.indexOf(i);
+    if(si>=0){el.classList.add('s'+(si+1));}
+    if(ITEM.includes(i)){
+      const t=document.createElement('div'); t.className='tag item'; t.textContent='◆'; el.appendChild(t);
+    } else if(EVENT.includes(i)){
+      const t=document.createElement('div'); t.className='tag event'; t.textContent='?'; el.appendChild(t);
+    } else if(PORTAL.includes(i)){
+      const t=document.createElement('div'); t.className='tag portal'; el.appendChild(t);
+    }
+    const op=ONRING.indexOf(i);
+    if(op>=0){
+      const pc=document.createElement('div'); pc.className='piece on-ring p'+(op+1); el.appendChild(pc);
+    }
+    ringEl.appendChild(el);
+  }
+
+  [45,135,225,315].forEach(function(d){
+    [200,140].forEach(function(r){
+      const p=P(r,d);
+      const el=document.createElement('div');
+      el.className='pad';
+      el.style.left=p[0]+'px'; el.style.top=p[1]+'px';
+      el.style.setProperty('--rot',(d+180)+'deg');
+      const ch=document.createElement('div'); ch.className='chev'; el.appendChild(ch);
+      lanesEl.appendChild(el);
+    });
+  });
+
+  [[-1,-1,1],[1,-1,2],[1,1,3],[-1,1,4]].forEach(function(c){
+    const m=document.createElement('div');
+    m.className='mat m'+c[2];
+    m.style.left=(C+c[0]*318)+'px'; m.style.top=(C+c[1]*318)+'px';
+    for(let k=0;k<4;k++){
+      const pc=document.createElement('div'); pc.className='piece p'+c[2]; m.appendChild(pc);
+    }
+    const lb=document.createElement('span'); lb.className='matlabel';
+    lb.textContent=(c[2]===1?'红队':c[2]===2?'蓝队':c[2]===3?'绿队':'黄队');
+    m.appendChild(lb);
+    basesEl.appendChild(m);
+  });
+
+  const plat=document.createElement('div'); plat.className='center-plat';
+  const orb=document.createElement('div'); orb.className='orb'; plat.appendChild(orb);
+  centerEl.appendChild(plat);
+})();
+</script>
+</body>
+</html>
