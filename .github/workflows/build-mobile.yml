@@ -6,8 +6,8 @@ on:
     tags: ["v*"]
 
 env:
-  VERSION_NAME: "1.0.4"
-  VERSION_CODE: "5"
+  VERSION_NAME: "1.0.5"
+  VERSION_CODE: "6"
   GODOT_VERSION: "4.3-stable"
   GODOT_TEMPLATE_DIR: "4.3.stable"
 
@@ -276,20 +276,20 @@ jobs:
           test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
           TAG="v${VERSION_NAME}"
           cat > notes.md <<'EOF'
-          ## 骑士飞行棋3 v1.0.4
+          ## 骑士飞行棋3 v1.0.5
 
           ### 本次改动
-          - 修复局域网客机把房主显示成 AI 的问题，两端队伍栏与回合提示一致
-          - 客机跟随房主选择的棋盘主题；客机端换主题入口置灰，房主权威
-          - 修复客机掷出 6 点（含场景强化后的 6 点）出发选择无响应、棋子出不了基地导致卡死的问题
-          - 安卓局域网自动搜房：新增 MulticastLock 支持，修复广播包被 Wi-Fi 驱动过滤导致互相搜不到房间的问题；发现日志新增收发计数
+          - 修复局域网“当前行动棋子”凸显归属：两端都按快照里的实际行动座次定位，不再落到别队棋子上
+          - 客机端补绘行动棋子的头顶箭头与落点提示，切换回合时自动清理，避免陈旧标记残留
+          - 命运事件转盘改为两端同时呈现、同一时刻起播、时长一致；由当前回合玩家点击转动
+          - 房主仍是转盘结果的唯一权威并广播状态；非当事人一端只展示、不可点，修复客机只有音效没有动画的问题
 
           ### 安装包
           - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
           - `KnightChess.apk` — 固定发布密钥签名，可直接安装；签名 SHA-256 指纹见 Release 说明
 
           签名证书 SHA-256：`13FB C983 CE20 B3DC 7BFB BBC1 3327 B397 6920 9EBE 84AD 146D 7C89 FE58 2C00 FBDE`
-          版本 1.0.4（build 5）
+          版本 1.0.5（build 6）
           EOF
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$IPA" --clobber

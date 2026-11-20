@@ -1,50 +1,24 @@
-# v1.0.4 修复任务清单
+# 1.0.5 实施任务
 
-> 前置：spec.md 已获确认。
+## T1 行动凸显（快照驱动）
+- [x] T1.1 `_show_move_pick`：当前队伍硬过滤 + option 写入 `dest`。
+- [x] T1.2 `_net_payload`：pick 项带 `dest`。
+- [x] T1.3 `_apply_net`：客机按快照补绘 `show_movable`/`mark_tiles`，非 pick 状态清理陈旧箭头与光点。
+- [x] T1.4 检查无其他按 0 队/本地座位绘制行动标记的路径（`_setup_showcase` 除外）。
 
-## T1 · B1 客机把房主显示成 AI
-- [ ] `Main._is_ai()` 增加客机分支：`team != 0 and team != net_guest_team`
-- [ ] 复查 `_team_display()`、`_update_all()` 队伍栏、回合提示在客机视角的文案
-- 验收：客机队伍栏 0 队不出现「AI」，自己显示「你」；2/3 队 AI 补位仍显示 AI
+## T2 轮盘双端同步
+- [x] T2.1 Hud：`roulette_spin_request` 信号、`can_spin/actor_name` 参数、`lock_roulette(text)`、`request_hide_roulette()`。
+- [x] T2.2 Main：`_run_roulette` 重写为权威选值、先广播后按起播延迟对齐、等待点击/ intent、20s 兜底。
+- [x] T2.3 Main：`_on_roulette_spin_pressed` 与 `_on_lan_intent "spin"`。
+- [x] T2.4 Main：`_on_lan_fx` 的 `roulette / roulette_result / roulette_hide` 按 actor/delay 处理。
+- [x] T2.5 testplay 自动起转，避免自测等待。
 
-## T2 · B2 主题权威与显示
-- [ ] `Hud` 新增 `_theme_locked` / `set_theme_locked()` / `set_theme_id()`
-- [ ] `Hud._pick_theme()`、开局页主题选择加锁定门禁
-- [ ] `Main._theme_swap()` 客机直接 return
-- [ ] `theme_previewed` 连接写回 `theme_id`（仅非客机）
-- [ ] `_start_match()` 同步 `hud.set_theme_id/theme_locked`
-- [ ] `_lan_leave_clicked()`、`_on_lan_link_lost()` 解锁
-- 验收：客机 ≡ 菜单主题按钮置灰且点击无效；客机本地 `theme_id` 始终等于房主下发值；房主开局页选的主题进入对局
+## T3 自测
+- [x] T3.1 扩展 `--selftest-lanfix`（座位/可点/凸显归属断言）。
+- [x] T3.2 headless 跑 lanfix/rules/swap/duel/save。
+- [x] T3.3 双进程 testplay 对拍：状态签名互为子序列、无卡死、无 SCRIPT ERROR。
 
-## T3 · B3 客机出基地卡死
-- [ ] 拆出 `_do_pick(idx)` 与 `_do_card(idx)`，`_on_piece_pressed` / `_on_card_pressed` 仅作本地门禁
-- [ ] `_on_lan_intent()` 重排门禁：`pick`/`card` 不受 busy 拦截，`roll` 仍要求空闲
-- [ ] `_lan_testplay > 0` 时打印 `LAN_INTENT` / `LAN_SEND` / `LAN_THEME`
-- 验收：晴日 raw5→6 与沙海 raw6→5 均可出基地并继续对局
-
-## T4 · 新增自测 `--selftest-lanintent`
-- [ ] 用例 A：cozy，`total=_theme_roll_total(5)`，team1 全在基地，模拟 `awaiting_pick` 后调用 `_on_lan_intent` pick，断言 `cell >= 0`
-- [ ] 用例 B：dune，`total=_theme_roll_total(6)`，`_legal_moves(5, true)`，同上
-- [ ] 打印 `SELFTEST_LANINTENT OK cozy=... dune=...` 并 `quit()`
-- 验收：headless 输出 OK
-
-## T5 · 回归全部自测
-- [ ] `pounce` / `stack` / `duel` / `save` / `save-slots` / `swap` / `rules` / `update` / `lanintent`
-- 验收：全部 `OK`
-
-## T6 · 双进程局域网实测证据
-- [ ] 房主 cozy + 客机加入，客机日志出现 `LAN_THEME cozy`、`LAN_SEND pick`、`LAN_STATE` 签名变化
-- [ ] 截图：两端主题一致、客机主题按钮置灰
-- 验收：日志/截图入汇报
-
-## T7 · 版本 1.0.4 / build 5
-- [ ] `project.godot`、`export_presets.cfg`（iOS/Android）、workflow env 与断言、Release 说明
-
-## T8 · 出包与发布
-- [ ] commit + push main
-- [ ] 触发 Actions，等待 Android APK / iOS 未签名 IPA
-- [ ] 回读 APK `versionCode=5`、`versionName=1.0.4`、证书 SHA-256；IPA 版本字段
-- [ ] 创建 `v1.0.4` Release 并上传产物，回传下载地址
-
-## T9 · 逐条汇报
-- [ ] B1/B2/B3 分别说明根因、改法、对存档 / LAN 协议 / 自测的影响
+## T4 版本与发布
+- [x] T4.1 project.godot / export_presets.cfg / workflow 升到 1.0.5 (6)。
+- [ ] T4.2 提交并推送 main。
+- [ ] T4.3 `gh workflow run` 出 APK+IPA，核验 Release 产物。

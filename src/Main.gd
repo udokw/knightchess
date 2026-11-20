@@ -172,6 +172,8 @@ var card_stage := 0
 var card_self := -1
 var _pick_pool: Array = []
 var _pick_options: Array = []
+## 客机行动标记的绘制签名：同一轮选择不重复重建箭头，避免 120ms 快照把动画打断
+var _pick_fx_sig := ""
 
 # 相机
 var cam_yaw := deg_to_rad(34.0)
@@ -251,7 +253,8 @@ var _net_push_ms := 0
 var _net_pick_hint := ""
 var _lan_testplay := -1
 var _lan_last_sig := ""
-var _guest_roulette_tok := 0
+## 当前回合玩家是否已发出“转轮盘”指令（本地点击或客机 intent）
+var _roulette_spin_pending := false
 ## 吃棋对决：开启后先玩一局石头剪刀布，输/平则攻击方退回吃棋前的格子
 var duel_enabled := false
 var _duel_active := false
@@ -875,6 +878,7 @@ func _setup_hud() -> void:
 	hud.piece_pressed.connect(_on_piece_pressed)
 	hud.start_pressed.connect(_start_match)
 	hud.roulette_tick.connect(func(): _play(sfx_tick))
+	hud.roulette_spin_request.connect(_on_roulette_spin_pressed)
 	hud.theme_previewed.connect(_on_theme_previewed)
 	hud.theme_selected.connect(_on_theme_selected)
 	hud.sound_toggled.connect(func(on: bool):
@@ -1648,6 +1652,10 @@ func _on_lan_intent(p: Dictionary) -> void:
 	elif a == "card":
 		if card_mode == "":
 			_do_card(int(p.get("s", -1)))
+	elif a == "spin":
+		# 客机轮盘：只有当前回合玩家能发；具体点数由房主抽取
+		if roulette_open and not _roulette_spin_pending:
+			_roulette_spin_pending = true
 
 
 func _on_lan_link_lost(final: bool) -> void:
@@ -1675,6 +1683,7 @@ func _net_payload() -> Dictionary:
 			"index": int(o.get("index", -1)),
 			"label": String(o.get("label", "")),
 			"color": col.to_html(false),
+			"dest": int(o.get("dest", 0)),
 		})
 	st["net"] = {
 		"team": current_team, "awaiting": awaiting_pick, "card_mode": card_mode,
@@ -1733,15 +1742,23 @@ func _apply_net(st: Dictionary) -> void:
 	_pick_pool = []
 	_pick_options = []
 	var opts: Array = []
+	var pick_nodes: Array = []
+	var pick_dests: Array = []
 	for o in net.get("pick", []):
 		if not (o is Dictionary):
 			continue
 		var idx := int(o.get("index", -1))
-		if idx < 0:
+		if idx < 0 or idx >= pieces.size():
+			continue
+		var p: Dictionary = pieces[idx]
+		# 快照里的实际行动座次说了算：别队棋子一律不画行动标记
+		if int(p["team"]) != current_team:
 			continue
 		_pick_pool.append(idx)
 		var col := Color.from_string(String(o.get("color", "")), TEAM_COLORS[0])
 		opts.append({"index": idx, "label": String(o.get("label", "")), "color": col})
+		pick_nodes.append(p["node"])
+		pick_dests.append(_pt_pos(_path_point(current_team, int(o.get("dest", 0)))))
 	_pick_options = opts
 	# 对决：客机作为攻击方时，房主推送 duel.active，客机弹面板出拳
 	var duel: Dictionary = net.get("duel", {})
@@ -1759,10 +1776,22 @@ func _apply_net(st: Dictionary) -> void:
 	elif _duel_shown:
 		_duel_shown = false
 		hud.hide_duel()
-	if current_team == net_guest_team and not opts.is_empty():
+	var guest_can_pick := current_team == net_guest_team and not opts.is_empty()
+	if guest_can_pick:
 		hud.show_pick(opts, _net_pick_hint)
 	else:
 		hud.hide_pick()
+	# 客机补绘“当前行动棋子”的头顶箭头与落点；非走子选择状态及时清理，避免标记残留到别队
+	if guest_can_pick and awaiting_pick and card_mode == "" and not pick_nodes.is_empty():
+		var sig := "%d|%s|%s" % [current_team, _net_pick_hint, str(_pick_pool)]
+		if sig != _pick_fx_sig:
+			_pick_fx_sig = sig
+			arena.show_movable(pick_nodes, TEAM_COLORS[current_team])
+			arena.mark_tiles(pick_dests, TEAM_COLORS[current_team])
+	elif _pick_fx_sig != "":
+		_pick_fx_sig = ""
+		arena.clear_movable()
+		arena.clear_marks()
 	_restoring = false
 	hud.set_dice(int(net.get("dice", 0)))
 	_update_all()
@@ -1877,16 +1906,23 @@ func _on_lan_fx(kind: String, d: Dictionary) -> void:
 						"color": Color.from_string(String(s.get("color", "")), Color.WHITE),
 					})
 			if not segs.is_empty():
-				_guest_roulette_tok += 1
-				hud.show_roulette(segs, String(d.get("kind", "item")))
-				hud.lock_roulette()
+				var actor := int(d.get("actor", -1))
+				var aname: String = TEAM_NAMES[clampi(actor, 0, 3)] if actor >= 0 else "对手"
+				# 只有当前回合座位（客机自己）可点，另一端纯展示
+				var can := actor == net_guest_team
+				hud.show_roulette(segs, String(d.get("kind", "item")), can, aname)
+				if not can:
+					hud.lock_roulette("等待 %s 转动命运之轮…" % aname)
 		"roulette_result":
+			# 与房主对齐起播：收到结果后按同一起播延迟起转。
+			# 不能用绝对 ticks：两个进程各自从启动计时，时间戳不同源（会等成几十秒）。
+			var wait_ms := int(d.get("delay", 260))
+			if wait_ms > 0:
+				await get_tree().create_timer(float(wait_ms) / 1000.0).timeout
 			hud.spin_roulette(int(d.get("idx", 0)))
 		"roulette_hide":
-			var tok := _guest_roulette_tok
-			await get_tree().create_timer(2.4).timeout
-			if tok == _guest_roulette_tok:
-				hud.hide_roulette()
+			# 旋转中不硬切，等亮相播完再收，避免把刚起播的动画吞掉
+			hud.request_hide_roulette()
 		"capture":
 			_shake(0.22, 9.0)
 			hud.screen_flash(Color.from_string(String(d.get("color", "")), Color.WHITE), 0.2)
@@ -2285,6 +2321,37 @@ func _run_lanfix_selftest() -> void:
 		while Time.get_ticks_msec() < deadline and int(pieces[idx]["cell"]) < 0:
 			await get_tree().create_timer(0.1).timeout
 		notes.append(["pick-%d->%d" % [int(probe[0]), pending_total], idx >= 0 and int(pieces[idx]["cell"]) >= 0])
+	# 行动标记/轮盘归属：只认快照当前座次，不按本地座位或固定索引
+	net_role = "guest"
+	net_guest_team = 1
+	current_team = 1
+	notes.append(["wheel-guest", _is_local_actor(1) and not _is_local_actor(0)])
+	net_role = "host"
+	current_team = 0
+	notes.append(["wheel-host", not _is_local_actor(1) and _is_local_actor(0)])
+	# 别队棋子不得进入行动选择池（防止头顶箭头挂错人）
+	net_role = "host"
+	current_team = 0
+	var others: Array = []
+	for i in pieces.size():
+		if int(pieces[i]["team"]) == 1:
+			others.append(i)
+	_show_move_pick(others, 3)
+	notes.append(["pick-team-filter", _pick_pool.is_empty()])
+	arena.clear_movable()
+	# 轮盘：旋转中收到 hide 不得提前收起（修复客机动画被吞）
+	hud.show_roulette(_build_roulette_segments("item"), "item", true, "红队")
+	hud.spin_roulette(1)
+	hud.request_hide_roulette()
+	await get_tree().create_timer(0.2).timeout
+	notes.append(["wheel-keep-spin", hud._roulette_overlay.visible])
+	await get_tree().create_timer(3.5).timeout
+	notes.append(["wheel-hide-after", not hud._roulette_overlay.visible])
+	# 权威流程：自动起转 → 抽值 → 两端可对齐的回放 → 收尾
+	auto_mode = true
+	await _run_roulette("item", pieces[0])
+	auto_mode = false
+	notes.append(["wheel-run-done", not roulette_open])
 	var ok := true
 	for n in notes:
 		if not bool(n[1]):
@@ -2407,6 +2474,8 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	six_streak = 0
 	roulette_open = false
 	_roulette_segments = []
+	_roulette_spin_pending = false
+	_pick_fx_sig = ""
 	cards = [[], [], [], []]
 	captures = [0, 0, 0, 0]
 	rolls = [0, 0, 0, 0]
@@ -2978,18 +3047,23 @@ func _show_move_pick(legal: Array, total: int) -> void:
 	var options: Array = []
 	var dests: Array = []
 	var nodes: Array = []
+	var pool: Array = []
 	for i in legal:
 		var p: Dictionary = pieces[i]
+		# 只认“实际当前行动队伍”，不按本地座位或固定索引定位
+		if int(p["team"]) != current_team:
+			continue
 		var label := ""
 		if p["cell"] < 0:
 			label = "%d号 · 基地出发" % (p["idx"] + 1)
 		else:
 			label = "%d号 · %d → %d" % [p["idx"] + 1, p["cell"] + 1, p["cell"] + total + 1]
-		options.append({"index": i, "label": label, "color": TEAM_COLORS[p["team"]]})
 		var dest: int = 0 if p["cell"] < 0 else int(p["cell"]) + total
+		pool.append(i)
+		options.append({"index": i, "label": label, "color": TEAM_COLORS[p["team"]], "dest": dest})
 		dests.append(_pt_pos(_path_point(p["team"], dest)))
 		nodes.append(p["node"])
-	_pick_pool = legal
+	_pick_pool = pool
 	_pick_options = options
 	_net_pick_hint = "掷出 %d 点，点棋子或按钮选择" % total
 	arena.mark_tiles(dests, TEAM_COLORS[current_team])
@@ -4688,21 +4762,65 @@ func _build_roulette_segments(kind := "item") -> Array:
 	return segs
 
 
-## 踩格触发：开轮盘 → 等待旋转结果 → 发道具 / 触发全屏事件
+## 本地点击“开始旋转”：客机只发意图，房主/单机置位后由权威协程统一抽结果
+func _on_roulette_spin_pressed() -> void:
+	if net_role == "guest":
+		hud.lock_roulette("等待房主确认转动…")
+		if lan != null:
+			lan.send_intent({"a": "spin"})
+		return
+	_roulette_spin_pending = true
+
+
+## 踩格触发：开轮盘 → 当前回合玩家点击 → 房主抽结果并广播 → 两端同步回放
 func _run_roulette(kind: String, p: Dictionary) -> void:
 	if game_over:
 		return
 	roulette_open = true
+	_roulette_spin_pending = false
 	_roulette_segments = _build_roulette_segments(kind)
-	hud.show_roulette(_roulette_segments, kind)
-	_net_fx("roulette", {"kind": kind, "segs": _net_roulette_segments()})
+	var actor: int = int(p["team"])
+	var can_spin := _is_local_actor(actor) and not _is_ai(actor)
+	var aname: String = TEAM_NAMES[clampi(actor, 0, 3)]
+	hud.show_roulette(_roulette_segments, kind, can_spin, aname)
+	if not can_spin:
+		hud.lock_roulette("等待 %s 转动命运之轮…" % aname)
+	_net_fx("roulette", {"kind": kind, "segs": _net_roulette_segments(), "actor": actor})
 	_play(click_player)
-	if _is_ai(p["team"]) or auto_mode:
+	# 等待“当前回合玩家”起转：AI/自动演示直接转；否则等本地点击或客机 intent
+	if _is_ai(actor) or auto_mode or (_lan_testplay > 0 and net_role == "host"):
 		await get_tree().create_timer(0.6).timeout
-		hud.spin_roulette()
-	var idx: int = await hud.roulette_done
+		_roulette_spin_pending = true
+	var waited := 0.0
+	while not _roulette_spin_pending and waited < 20.0:
+		await get_tree().create_timer(0.15).timeout
+		waited += 0.15
+		if game_over or _is_ai(actor):
+			break
+	if game_over:
+		roulette_open = false
+		_roulette_segments = []
+		hud.hide_roulette()
+		_net_fx("roulette_hide", {})
+		return
+	var n := _roulette_segments.size()
+	if n <= 0:
+		roulette_open = false
+		hud.hide_roulette()
+		_net_fx("roulette_hide", {})
+		return
+	# 房主是唯一抽签方；先广播结果与“起播延迟”，再两端按同一延迟起转
+	# （两端进程 ticks 不同源，所以用相对延迟而不是绝对时间戳）
+	var idx := randi() % n
+	var start_delay := 260
+	_net_fx("roulette_result", {
+		"idx": idx, "label": String(_roulette_segments[idx].get("label", "?")), "delay": start_delay,
+	})
+	await get_tree().create_timer(float(start_delay) / 1000.0).timeout
+	hud.spin_roulette(idx)
+	var done_idx: int = await hud.roulette_done
 	roulette_open = false
-	if idx < 0 or idx >= _roulette_segments.size():
+	if done_idx < 0:
 		_roulette_segments = []
 		hud.hide_roulette()
 		_net_fx("roulette_hide", {})
@@ -4710,8 +4828,7 @@ func _run_roulette(kind: String, p: Dictionary) -> void:
 	var seg: Dictionary = _roulette_segments[idx]
 	_roulette_segments = []
 	var id := String(seg.get("id", ""))
-	_net_fx("roulette_result", {"idx": idx, "label": String(seg.get("label", "?"))})
-	_log("【轮盘】%s 转出「%s」" % [TEAM_NAMES[p["team"]], String(seg.get("label", "?"))])
+	_log("【轮盘】%s 转出「%s」" % [TEAM_NAMES[actor], String(seg.get("label", "?"))])
 	if kind == "item":
 		_grant_item(p, id)
 		await get_tree().create_timer(0.8).timeout

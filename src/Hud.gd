@@ -17,6 +17,8 @@ signal music_toggled(on: bool)
 signal prefs_changed
 signal roulette_done(index: int)
 signal roulette_tick
+## 本地玩家点击“开始旋转”：由 Main 决定发 intent 还是直接起转
+signal roulette_spin_request
 signal home_create
 signal home_load
 signal home_settings
@@ -182,6 +184,7 @@ var _roulette_result: Label
 var _roulette_spin_btn: Button
 var _roulette_segments: Array = []
 var _roulette_spinning := false
+var _roulette_hide_pending := false
 var _roulette_tween: Tween
 var _board_cells := 40
 var _board_buttons: Array = []
@@ -1102,7 +1105,7 @@ func _build_roulette() -> void:
 	_roulette_spin_btn.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
 	_roulette_spin_btn.add_theme_stylebox_override("pressed", _btn_style(Color("b5863f"), Color("ffe0a0"), 14))
 	_roulette_spin_btn.add_theme_color_override("font_color", Color("1a1206"))
-	_roulette_spin_btn.pressed.connect(_spin_roulette)
+	_roulette_spin_btn.pressed.connect(_request_spin)
 	vb.add_child(_roulette_spin_btn)
 
 	var hint := _label("轮盘是强制抽取：转到什么就拿什么", 11, Color(1, 1, 1, 0.38))
@@ -1111,18 +1114,23 @@ func _build_roulette() -> void:
 
 
 ## 显示轮盘：kind = "item"（道具轮盘） / "event"（事件轮盘）
-func show_roulette(segments: Array, kind := "item") -> void:
+## can_spin：轮到本机操作才为 true；否则只做展示，按钮禁用
+func show_roulette(segments: Array, kind := "item", can_spin := true, actor_name := "") -> void:
 	_roulette_segments = segments
 	_roulette_spinning = false
+	_roulette_hide_pending = false
 	if kind == "event":
 		_roulette_title.text = "命 运 事 件 轮 盘"
 		_roulette_sub.text = "全屏事件 · 转到什么就发生什么"
 	else:
 		_roulette_title.text = "道 具 轮 盘"
 		_roulette_sub.text = "随机道具 · 转到什么就拿到什么"
-	_roulette_result.text = "点击下方按钮转动命运之轮"
 	_roulette_result.add_theme_color_override("font_color", Color(0.9, 0.94, 1.0, 0.85))
-	_roulette_spin_btn.disabled = false
+	_roulette_spin_btn.disabled = not can_spin
+	if can_spin:
+		_roulette_result.text = "轮到你转动命运之轮"
+	else:
+		_roulette_result.text = "等待 %s 转动命运之轮…" % (actor_name if actor_name != "" else "对手")
 	_roulette_wheel.labels.clear()
 	_roulette_wheel.colors.clear()
 	for s in segments:
@@ -1145,14 +1153,31 @@ func spin_roulette(force := -1) -> void:
 
 
 ## 客机：等待房主点击，禁用本地按钮，避免各转各的
-func lock_roulette() -> void:
+func lock_roulette(text := "等待对手转动轮盘…") -> void:
 	_roulette_spin_btn.disabled = true
-	_roulette_result.text = "等待房主转动轮盘…"
+	_roulette_result.text = text
+
+
+## 客机：隐藏必须等本轮旋转+亮相播完，否则会砍断刚起播的转盘
+func request_hide_roulette() -> void:
+	if _roulette_spinning:
+		_roulette_hide_pending = true
+		return
+	hide_roulette()
+
+
+func _request_spin() -> void:
+	if _roulette_spinning or not _roulette_overlay.visible:
+		return
+	if _roulette_spin_btn.disabled:
+		return
+	roulette_spin_request.emit()
 
 
 func hide_roulette() -> void:
 	var was_spinning := _roulette_spinning
 	_roulette_spinning = false
+	_roulette_hide_pending = false
 	if _roulette_tween and _roulette_tween.is_valid():
 		_roulette_tween.kill()
 	_roulette_overlay.visible = false
@@ -1200,6 +1225,9 @@ func _roulette_reveal(idx: int) -> void:
 	pop.tween_property(_roulette_result, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	await get_tree().create_timer(0.8).timeout
 	roulette_done.emit(idx)
+	if _roulette_hide_pending:
+		_roulette_hide_pending = false
+		hide_roulette()
 
 
 # ---------------------------------------------------------------- 播报 / 事件
