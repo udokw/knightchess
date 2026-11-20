@@ -20,5 +20,5 @@
 
 ## T4 版本与发布
 - [x] T4.1 project.godot / export_presets.cfg / workflow 升到 1.0.5 (6)。
-- [ ] T4.2 提交并推送 main。
-- [ ] T4.3 `gh workflow run` 出 APK+IPA，核验 Release 产物。
+- [x] T4.2 提交并推送 main。
+- [x] T4.3 `gh workflow run` 出 APK+IPA，核验 Release 产物（v1.0.5：KnightChess.apk / KnightChess-unsigned.ipa）。
