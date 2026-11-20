@@ -16,8 +16,9 @@ const TILE_TOP := 8.0
 const DECK_HALF := 890.0
 ## 自然场景的地面高度：广场像真实村落广场一样贴着地面，而不是悬空的台子
 const SCENE_GROUND := -70.0
-const DICE_HOME_BASE := Vector3(0, 300, 0)
-const DICE_LAND := Vector3(0, 276, 0)
+## 骰子悬浮高度：必须高于中央水景的穹顶/悬浮金球（顶部约 y=213），否则会与拱形结构互穿
+const DICE_HOME_BASE := Vector3(0, 396, 0)
+const DICE_LAND := Vector3(0, 372, 0)
 ## 骰子整体缩放：2 倍于原尺寸，保证手机屏上点数清晰可读
 const DICE_SCALE := 2.64
 
@@ -36,7 +37,7 @@ const THEMES := {
 		"scene": "dusk",
 		"sky": "res://assets/textures/sky_dusk.png", "sky_energy": 0.85,
 		"ambient": 0.24, "exposure": 1.00, "saturation": 1.18, "glow": 0.7,
-		"sun_color": "ffdcb8", "sun_energy": 2.0, "sun_rot": Vector3(-55, -30, 0),
+		"sun_color": "ffdcb8", "sun_energy": 2.0, "sun_rot": Vector3(-38, -56, 0),
 		"fill_color": "6f8fd8", "fill_energy": 0.28,
 		"fog_color": "8a93b8", "fog_energy": 0.20, "fog_density": 0.00003,
 		"center_color": "ffb46b", "center_energy": 2.2,
@@ -50,7 +51,7 @@ const THEMES := {
 		"scene": "frost",
 		"sky": "res://assets/textures/sky_frost.png", "sky_energy": 0.95,
 		"ambient": 0.24, "exposure": 0.84, "saturation": 1.04, "glow": 0.55,
-		"sun_color": "e6f4ff", "sun_energy": 1.05, "sun_rot": Vector3(-48, -20, 0),
+		"sun_color": "e6f4ff", "sun_energy": 1.05, "sun_rot": Vector3(-64, 12, 0),
 		"fill_color": "7fb0ff", "fill_energy": 0.40,
 		"fog_color": "9ec4e0", "fog_energy": 0.14, "fog_density": 0.00002,
 		"center_color": "bfe6ff", "center_energy": 1.7,
@@ -64,7 +65,7 @@ const THEMES := {
 		"scene": "ember",
 		"sky": "res://assets/textures/sky_ember.png", "sky_energy": 0.80,
 		"ambient": 0.30, "exposure": 0.96, "saturation": 1.26, "glow": 0.76,
-		"sun_color": "ffb070", "sun_energy": 2.3, "sun_rot": Vector3(-62, -38, 0),
+		"sun_color": "ffb070", "sun_energy": 2.0, "sun_rot": Vector3(-58, -30, 0),
 		"fill_color": "ff5a3a", "fill_energy": 0.30,
 		"fog_color": "d98a6a", "fog_energy": 0.5, "fog_density": 0.00007,
 		"center_color": "ff7a3a", "center_energy": 2.7,
@@ -78,7 +79,7 @@ const THEMES := {
 		"scene": "jade",
 		"sky": "res://assets/textures/sky_jade.png", "sky_energy": 0.88,
 		"ambient": 0.20, "exposure": 0.90, "saturation": 1.10, "glow": 0.62,
-		"sun_color": "dcffd2", "sun_energy": 1.25, "sun_rot": Vector3(-50, -26, 0),
+		"sun_color": "dcffd2", "sun_energy": 1.25, "sun_rot": Vector3(-50, 34, 0),
 		"fill_color": "58c88a", "fill_energy": 0.32,
 		"fog_color": "4f8a72", "fog_energy": 0.10, "fog_density": 0.00002,
 		"center_color": "7cffb8", "center_energy": 2.1,
@@ -92,7 +93,7 @@ const THEMES := {
 		"scene": "void",
 		"sky": "res://assets/textures/sky_void.png", "sky_energy": 0.92,
 		"ambient": 0.26, "exposure": 0.90, "saturation": 1.16, "glow": 0.86,
-		"sun_color": "c0b0ff", "sun_energy": 1.35, "sun_rot": Vector3(-68, -44, 0),
+		"sun_color": "c0b0ff", "sun_energy": 1.35, "sun_rot": Vector3(-70, -60, 0),
 		"fill_color": "6a4fd8", "fill_energy": 0.42,
 		"fog_color": "7a6ac0", "fog_energy": 0.40, "fog_density": 0.00006,
 		"center_color": "a07cff", "center_energy": 2.6,
@@ -109,7 +110,7 @@ const THEMES := {
 		"sky_top": "B7DDEE", "sky_horizon": "FDF4E2",
 		"ground_horizon": "EEF4DF", "ground_bottom": "CFE3C0",
 		"ambient": 0.18, "exposure": 0.72, "saturation": 1.12, "glow": 0.0, "contrast": 1.24,
-		"sun_color": "fff3da", "sun_energy": 1.18, "sun_rot": Vector3(-54, -32, 0),
+		"sun_color": "fff3da", "sun_energy": 1.18, "sun_rot": Vector3(-50, 62, 0),
 		"fill_color": "d2e6f4", "fill_energy": 0.18,
 		"fog_color": "e6f1e2", "fog_energy": 0.0, "fog_density": 0.0,
 		"center_color": "ffe6b4", "center_energy": 0.6,
@@ -135,7 +136,7 @@ const THEMES := {
 		"sky_top": "8FB8D8", "sky_horizon": "F6E0B4",
 		"ground_horizon": "E8C88A", "ground_bottom": "C9A468",
 		"ambient": 0.22, "exposure": 0.78, "saturation": 1.16, "glow": 0.14, "contrast": 1.26,
-		"sun_color": "fff0c8", "sun_energy": 1.15, "sun_rot": Vector3(-38, -24, 0),
+		"sun_color": "fff0c8", "sun_energy": 1.15, "sun_rot": Vector3(-30, -118, 0),
 		"fill_color": "ffd08a", "fill_energy": 0.18,
 		"fog_color": "d8b87a", "fog_energy": 0.08, "fog_density": 0.00002,
 		"center_color": "ffd68a", "center_energy": 1.8,
@@ -158,7 +159,7 @@ const THEMES := {
 		"sky_top": "0E0B08", "sky_horizon": "6A4A20",
 		"ground_horizon": "2A1E12", "ground_bottom": "0A0806",
 		"ambient": 0.30, "exposure": 0.92, "saturation": 1.05, "glow": 0.70, "contrast": 1.14,
-		"sun_color": "ffcf94", "sun_energy": 1.3, "sun_rot": Vector3(-72, -40, 0),
+		"sun_color": "ffcf94", "sun_energy": 1.3, "sun_rot": Vector3(-76, 20, 0),
 		"fill_color": "5a6a8a", "fill_energy": 0.30,
 		"fog_color": "4a3a24", "fog_energy": 0.22, "fog_density": 0.00004,
 		"center_color": "ffc46a", "center_energy": 2.0,
@@ -2183,6 +2184,8 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Cal
 		fall.tween_property(body, "scale", Vector3(1.24, 0.80, 1.24), 0.16)
 	await fall.finished
 	fx_sound("cap_slam")
+	# 分场景命中音：草地闷响 / 冰层脆裂 / 熔岩爆燃 / 黄铜钟鸣……
+	fx_sound("hit_" + theme_id, -2.0)
 	impact(Vector3(vpos.x, TILE_TOP, vpos.z), color)
 	# 命中帧：此刻才允许写入游戏状态（Main 通过 on_hit 回调执行），视觉先行
 	hit_flash(attacker)

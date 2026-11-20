@@ -27,15 +27,27 @@ signal delete_slot_pressed(slot: int)
 signal save_slot_pressed(slot: int)
 signal duel_chosen(pick: int)
 signal duel_toggled(on: bool)
+signal rules_toggled(on: bool)
+signal update_toggled(on: bool)
+signal update_check_pressed
+signal update_download_pressed
+signal update_later_pressed
+signal update_browser_pressed
 signal lan_host_pressed(player_name: String)
 signal lan_join_pressed(ip: String, room: String)
 signal lan_leave_pressed
 signal lan_refresh_pressed
+signal lan_start_pressed
+signal lan_ready_pressed(on: bool)
+signal lan_seat_ai_pressed(seat: int, on: bool)
+signal lan_kick_pressed(seat: int)
+signal lan_name_changed(name: String)
 
 const GOLD := Color("f0cd8a")
 const TEXT := Color("e8edf7")
 const DIM := Color("98a3b8")
 
+const UpdateFeedScript := preload("res://src/Update.gd")
 const THEME_IDS := ["cozy", "dusk", "frost", "ember", "jade", "void", "dune", "clock"]
 const THEME_NAMES := ["晴日牧野", "暮色浮岛", "霜封冰湖", "熔火裂谷", "翠玉雨林", "虚空星海", "沙海神庙", "齿轮高塔"]
 const THEME_SHORT := ["晴日", "暮色", "霜封", "熔火", "翠玉", "虚空", "沙海", "齿轮"]
@@ -62,6 +74,54 @@ const ITEM_INFO := {
 
 const CHAR_NAMES := ["骑士", "法师", "弓手", "国王", "刺客", "守卫", "女武神", "机械兵"]
 const BOARD_SIZES := [40, 52, 64]
+## 玩法说明：与 Main.gd 的场景规则、道具、事件保持一致
+const HELP_THEME_RULES := [
+	"牧野微风：每次掷骰点数 +1。",
+	"云梯：棋子从基地出发时直接落在第 2 格。",
+	"冰面滑行：棋子停稳后再向前滑 1 格。",
+	"灼热地面：停在第 3、6、9… 格（3 的倍数）会被烫退 1 格。",
+	"丛林捷径：掷骰点数最低按 3 计算（掷 1、2 都算 3）。",
+	"虚空裂隙：每次停稳有 20% 概率再前进 1 格。",
+	"流沙陷足：每次掷骰点数 -1（最低 1 点，掷 6 算 5，但仍可出基地）。",
+	"齿轮咬合：停在第 4、8、12… 格（4 的倍数）会再前进 1 格。",
+]
+const HELP_ITEM_DESC := {
+	"boost": "本回合点数 +2。",
+	"shield": "免疫一次被吃棋，护盾触发后消失。",
+	"warp": "立即向前移动 3 格。",
+	"snipe": "选择一名对手棋子，把它击退 3 格。",
+	"swap": "选择一名对手棋子，与其交换位置。",
+	"freeze": "选择一名对手，使其下一回合无法行动。",
+	"double": "本回合掷骰点数 ×2。",
+	"teleport": "立即向前移动 5 格。",
+	"moonstep": "前进 2 格，并获得一层护盾。",
+	"frostlock": "对手棋子后退 2 格，并被冻结一回合。",
+	"inferno": "向前冲锋 4 格，落点附近的对手全部被炸退。",
+	"vortex": "所有对手棋子后退 1 格。",
+	"steal": "从道具最多的对手手中抢走一张道具卡。",
+	"bomb": "选择一名对手棋子，直接炸回基地。",
+	"gale": "前进 2 格，之后可以再掷一次骰子。",
+	"jadeguard": "己方所有在场棋子获得一层护盾。",
+	"voidstep": "随机把一名对手棋子放逐回基地。",
+}
+const HELP_EVENTS := [
+	["秘 宝", "获得一张随机道具卡；卡槽已满时化为金币。"],
+	["陨 石", "所有对手棋子后退 2 格。"],
+	["顺 风", "己方触发事件的棋子前进 2 格。"],
+	["陷 阱", "己方触发事件的棋子后退 3 格。"],
+	["传送门", "己方棋子被传送到前方最近的安全格。"],
+	["混 沌", "全场棋子随机前后移动 0～2 格。"],
+	["祝 福", "己方棋子获得护盾，并额外抽一张道具卡。"],
+	["星辉之赐", "己方所有在场棋子前进 1 格。"],
+	["暴风雪", "所有对手棋子后退 3 格。"],
+	["火山喷发", "随机 2 枚棋子被冲击波掀退 2 格。"],
+	["伏 击", "落点附近的对手棋子后退 3 格（最多 3 枚）。"],
+	["金 雨", "四队各抽一张道具卡（卡槽未满时）。"],
+	["地 震", "全场棋子后退 1 格。"],
+	["诅 咒", "己方下一回合被冻结，领先的棋子后退 2 格。"],
+	["翠 蛇 缠 绕", "对手所有在场棋子后退 2 格并破盾，落点获得护盾。"],
+	["虚 空 裂 隙", "全场棋子被空间乱流随机抛动：对手可能后退 3 格或前进 4 格，己方只会前进。"],
+]
 const BOARD_SIZE_NAMES := ["标准 · 40 格", "大型 · 52 格", "巨型 · 64 格"]
 const TEAMS_ROW_H := 60.0
 const CAST_TEAM_COLORS := [Color("e0503f"), Color("3d8ae0"), Color("3fb96a"), Color("e0a92f")]
@@ -164,6 +224,8 @@ var _load_overlay: Control
 var _saves_box: VBoxContainer
 var _load_hint: Label
 var _settings_overlay: Control
+var _help_overlay: Control
+var _help_scroll: ScrollContainer
 var _s_sound_button: Button
 var _s_music_button: Button
 var _s_pick_button: Button
@@ -176,6 +238,18 @@ var _lan_host_btn: Button
 var _lan_leave_btn: Button
 var _lan_ip_edit: LineEdit
 var _lan_room_edit: LineEdit
+var _lan_name_edit: LineEdit
+var _lan_host_box: PanelContainer
+var _lan_browse: VBoxContainer
+var _lan_lobby_panel: PanelContainer
+var _lan_room_label: Label
+var _lan_seats_box: VBoxContainer
+var _lan_start_btn: Button
+var _lan_ready_btn: Button
+var _lan_player_name := "骑士"
+var _lan_my_seat := -1
+var _lan_is_host := false
+var _lan_in_room := false
 var _save_overlay: Control
 var _save_box: VBoxContainer
 var _save_hint: Label
@@ -183,7 +257,9 @@ var _save_confirm_slot := -1
 var _save_confirm_until := 0
 var _save_confirm_btn: Button = null
 var _s_duel_button: Button = null
+var _s_rules_button: Button = null
 var _duel_on := false
+var _rules_on := true
 var _duel_overlay: Control
 var _duel_title: Label
 var _duel_sub: Label
@@ -194,6 +270,17 @@ var _duel_token := 0
 var _duel_locked := true
 var _duel_pick_value := -1
 var _duel_tween: Tween
+## 更新检查（小对话框，不做全屏强制）
+var _s_update_button: Button = null
+var _update_on := true
+var _update_version_label: Label = null
+var _update_status_label: Label = null
+var _update_overlay: Control = null
+var _update_title: Label = null
+var _update_body: Label = null
+var _update_download_btn: Button = null
+var _update_browser_btn: Button = null
+var _update_retry_btn: Button = null
 
 
 func _ready() -> void:
@@ -224,7 +311,9 @@ func _ready() -> void:
 	_build_load()
 	_build_save()
 	_build_settings()
+	_build_help()
 	_build_lan()
+	_build_update_dialog()
 
 
 # ---------------------------------------------------------------- 基础样式
@@ -491,6 +580,19 @@ func _toggle_duel() -> void:
 func _paint_duel_button() -> void:
 	if _s_duel_button != null:
 		_s_duel_button.text = "吃棋对决：开" if _duel_on else "吃棋对决：关"
+
+
+func _toggle_rules() -> void:
+	_rules_on = not _rules_on
+	_paint_rules_button()
+	rules_toggled.emit(_rules_on)
+	if not _applying_prefs:
+		prefs_changed.emit()
+
+
+func _paint_rules_button() -> void:
+	if _s_rules_button != null:
+		_s_rules_button.text = "场景规则：开" if _rules_on else "场景规则：关"
 
 
 func _pick_theme(id: String) -> void:
@@ -945,9 +1047,15 @@ func show_roulette(segments: Array, kind := "item") -> void:
 	pop.tween_property(_roulette_wheel, "scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-## 外部（AI 回合 / 自动演示）调用
-func spin_roulette() -> void:
-	_spin_roulette()
+## 外部（AI 回合 / 自动演示）调用；force 用于客机复现房主的结果
+func spin_roulette(force := -1) -> void:
+	_spin_roulette(force)
+
+
+## 客机：等待房主点击，禁用本地按钮，避免各转各的
+func lock_roulette() -> void:
+	_roulette_spin_btn.disabled = true
+	_roulette_result.text = "等待房主转动轮盘…"
 
 
 func hide_roulette() -> void:
@@ -961,7 +1069,7 @@ func hide_roulette() -> void:
 		roulette_done.emit(-1)
 
 
-func _spin_roulette() -> void:
+func _spin_roulette(force := -1) -> void:
 	if _roulette_spinning or _roulette_segments.is_empty():
 		return
 	_roulette_spinning = true
@@ -971,6 +1079,8 @@ func _spin_roulette() -> void:
 	var n := _roulette_segments.size()
 	var seg := TAU / float(n)
 	var idx := randi() % n
+	if force >= 0:
+		idx = clampi(force, 0, n - 1)
 	var jitter := randf_range(-seg * 0.3, seg * 0.3)
 	var target: float = -(float(idx) * seg + seg * 0.5) + jitter
 	while target < _roulette_wheel.rotation + TAU * 4.0:
@@ -1614,6 +1724,29 @@ func _build_settings() -> void:
 	duel_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(duel_tip)
 
+	_s_rules_button = _btn("场景规则：开", Vector2(0, 46), 16)
+	_s_rules_button.pressed.connect(_toggle_rules)
+	vb.add_child(_s_rules_button)
+	_paint_rules_button()
+	var rules_tip := _label("关闭后 8 套场景只保留外观，不再附加掷骰/落点修正", 11, Color(1, 1, 1, 0.4))
+	rules_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(rules_tip)
+
+	var help_btn := _btn("玩 法 说 明", Vector2(0, 46), 16)
+	help_btn.pressed.connect(show_help)
+	vb.add_child(help_btn)
+
+	_s_update_button = _btn("更新检查：开", Vector2(0, 46), 16)
+	_s_update_button.pressed.connect(_toggle_update)
+	vb.add_child(_s_update_button)
+	_update_version_label = _label("当前版本 v%s" % UpdateFeedScript.current_version(), 12, DIM)
+	_update_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_update_version_label)
+	_update_status_label = _label("", 11, Color(1, 1, 1, 0.45))
+	_update_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_update_status_label)
+	_paint_update_button()
+
 	vb.add_child(_spacer(4))
 	vb.add_child(_label("默认棋盘主题", 13, DIM))
 	var grid := GridContainer.new()
@@ -1637,15 +1770,38 @@ func _build_lan() -> void:
 	var pair := _page_base()
 	_lan_overlay = pair[0]
 	var center: CenterContainer = pair[1]
-	var vb := _page_card(center, 760)
-	_page_head(vb, "局 域 网 对 战", "同一 Wi-Fi")
+	var vb := _page_card(center, 780)
+	_page_head(vb, "局 域 网 对 战", "同一 Wi-Fi · 4 人")
 
-	var host_box := PanelContainer.new()
-	host_box.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.04), 14))
-	vb.add_child(host_box)
+	# 玩家名称：房主房间名 / 客机入座名共用，随设置持久化
+	var nrow := HBoxContainer.new()
+	nrow.add_theme_constant_override("separation", 10)
+	vb.add_child(nrow)
+	var nl := _label("玩家名称", 14, DIM)
+	nl.custom_minimum_size = Vector2(84, 0)
+	nl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	nrow.add_child(nl)
+	_lan_name_edit = LineEdit.new()
+	_lan_name_edit.text = _lan_player_name
+	_lan_name_edit.max_length = 12
+	_lan_name_edit.placeholder_text = "输入昵称"
+	_lan_name_edit.custom_minimum_size = Vector2(0, 42)
+	_lan_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lan_name_edit.add_theme_stylebox_override("normal", _btn_style(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.12), 10))
+	_lan_name_edit.add_theme_color_override("font_color", TEXT)
+	_lan_name_edit.add_theme_color_override("caret_color", GOLD)
+	_lan_name_edit.text_changed.connect(func(t: String):
+		_lan_player_name = t.strip_edges()
+		if not _applying_prefs:
+			lan_name_changed.emit(_lan_player_name))
+	nrow.add_child(_lan_name_edit)
+
+	_lan_host_box = PanelContainer.new()
+	_lan_host_box.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.04), 14))
+	vb.add_child(_lan_host_box)
 	var hb := VBoxContainer.new()
 	hb.add_theme_constant_override("separation", 8)
-	host_box.add_child(hb)
+	_lan_host_box.add_child(hb)
 	var hrow := HBoxContainer.new()
 	hrow.add_theme_constant_override("separation", 10)
 	hb.add_child(hrow)
@@ -1653,19 +1809,52 @@ func _build_lan() -> void:
 	hlabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hrow.add_child(hlabel)
 	_lan_host_btn = _btn("创建房间", Vector2(130, 40), 16)
-	_lan_host_btn.pressed.connect(func(): lan_host_pressed.emit(""))
+	_lan_host_btn.pressed.connect(func(): lan_host_pressed.emit(_lan_player_name))
 	hrow.add_child(_lan_host_btn)
 	_lan_leave_btn = _btn("解散房间", Vector2(110, 40), 15)
 	_lan_leave_btn.visible = false
 	_lan_leave_btn.pressed.connect(func(): lan_leave_pressed.emit())
 	hrow.add_child(_lan_leave_btn)
-	_lan_host_info = _label("创建后房号会自动出现在对方房间列表里", 12, Color(1, 1, 1, 0.45))
+	_lan_host_info = _label("创建后房号会自动出现在附近房间列表里", 12, Color(1, 1, 1, 0.45))
 	hb.add_child(_lan_host_info)
 
-	vb.add_child(_spacer(2))
+	# 房间大厅：座位表 + 开始 / 准备 / 离开
+	_lan_lobby_panel = PanelContainer.new()
+	_lan_lobby_panel.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.045), 14))
+	_lan_lobby_panel.visible = false
+	vb.add_child(_lan_lobby_panel)
+	var lvb := VBoxContainer.new()
+	lvb.add_theme_constant_override("separation", 8)
+	_lan_lobby_panel.add_child(lvb)
+	_lan_room_label = _label("房间", 15, GOLD)
+	lvb.add_child(_lan_room_label)
+	_lan_seats_box = VBoxContainer.new()
+	_lan_seats_box.add_theme_constant_override("separation", 6)
+	lvb.add_child(_lan_seats_box)
+	var lrow := HBoxContainer.new()
+	lrow.add_theme_constant_override("separation", 10)
+	lvb.add_child(lrow)
+	_lan_start_btn = _btn("开 始 对 局", Vector2(0, 44), 17)
+	_lan_start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lan_start_btn.visible = false
+	_lan_start_btn.pressed.connect(func(): lan_start_pressed.emit())
+	lrow.add_child(_lan_start_btn)
+	_lan_ready_btn = _btn("准 备", Vector2(0, 44), 17)
+	_lan_ready_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lan_ready_btn.visible = false
+	_lan_ready_btn.pressed.connect(func(): lan_ready_pressed.emit(_lan_ready_btn.text == "准 备"))
+	lrow.add_child(_lan_ready_btn)
+	var exit_btn := _btn("离开", Vector2(96, 44), 15)
+	exit_btn.pressed.connect(func(): lan_leave_pressed.emit())
+	lrow.add_child(exit_btn)
+
+	_lan_browse = VBoxContainer.new()
+	_lan_browse.add_theme_constant_override("separation", 8)
+	vb.add_child(_lan_browse)
+
 	var jrow := HBoxContainer.new()
 	jrow.add_theme_constant_override("separation", 10)
-	vb.add_child(jrow)
+	_lan_browse.add_child(jrow)
 	var jlabel := _label("附近的房间", 15, TEXT)
 	jlabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	jrow.add_child(jlabel)
@@ -1676,7 +1865,7 @@ func _build_lan() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(0, 190)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vb.add_child(scroll)
+	_lan_browse.add_child(scroll)
 	_lan_rooms_box = VBoxContainer.new()
 	_lan_rooms_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_lan_rooms_box.add_theme_constant_override("separation", 6)
@@ -1684,7 +1873,7 @@ func _build_lan() -> void:
 
 	var mrow := HBoxContainer.new()
 	mrow.add_theme_constant_override("separation", 8)
-	vb.add_child(mrow)
+	_lan_browse.add_child(mrow)
 	_lan_ip_edit = LineEdit.new()
 	_lan_ip_edit.placeholder_text = "房主 IP（可留空）"
 	_lan_ip_edit.custom_minimum_size = Vector2(0, 42)
@@ -1704,6 +1893,12 @@ func _build_lan() -> void:
 	var join := _btn("加入", Vector2(100, 42), 16)
 	join.pressed.connect(_lan_join_clicked)
 	mrow.add_child(join)
+
+	var net_tip := _label("搜不到房间？确认两台设备在同一 Wi-Fi；iOS 首次启动请允许「本地网络」；电脑端请允许防火墙的专用网络访问。也可填房主 IP + 房号直连。",
+		11, Color(1, 1, 1, 0.4))
+	net_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	net_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(net_tip)
 
 	_lan_status = _label("", 12, Color(1, 1, 1, 0.55))
 	_lan_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1808,8 +2003,11 @@ func _hide_pages() -> void:
 	_load_overlay.visible = false
 	_save_overlay.visible = false
 	_settings_overlay.visible = false
+	_help_overlay.visible = false
 	_lan_overlay.visible = false
 	_duel_overlay.visible = false
+	if _update_overlay != null:
+		_update_overlay.visible = false
 
 
 func _hide_game_nodes() -> void:
@@ -1904,6 +2102,212 @@ func show_settings() -> void:
 	_hide_pages()
 	_settings_overlay.visible = true
 	_hide_game_nodes()
+
+
+# ---------------------------------------------------------------- 更新检查
+
+func _build_update_dialog() -> void:
+	_update_overlay = Control.new()
+	_update_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_update_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_update_overlay.visible = false
+	_root.add_child(_update_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.01, 0.015, 0.03, 0.6)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_update_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_update_overlay.add_child(center)
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.98), 20, GOLD, 2))
+	card.custom_minimum_size = Vector2(470, 0)
+	center.add_child(card)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	card.add_child(vb)
+
+	_update_title = _label("发 现 新 版 本", 24, GOLD)
+	_update_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_update_title)
+
+	_update_body = _label("", 14, TEXT)
+	_update_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_update_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_update_body.custom_minimum_size = Vector2(420, 0)
+	vb.add_child(_update_body)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_child(row)
+
+	_update_download_btn = _btn("下载更新", Vector2(0, 44), 16)
+	_update_download_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_download_btn.pressed.connect(func(): update_download_pressed.emit())
+	row.add_child(_update_download_btn)
+
+	_update_retry_btn = _btn("重新检查", Vector2(0, 44), 15)
+	_update_retry_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_retry_btn.visible = false
+	_update_retry_btn.pressed.connect(func(): update_check_pressed.emit())
+	row.add_child(_update_retry_btn)
+
+	_update_browser_btn = _btn("用浏览器打开", Vector2(0, 44), 15)
+	_update_browser_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_browser_btn.visible = false
+	_update_browser_btn.pressed.connect(func(): update_browser_pressed.emit())
+	row.add_child(_update_browser_btn)
+
+	var later := _btn("以后再说", Vector2(0, 44), 15)
+	later.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	later.pressed.connect(func():
+		hide_update_dialog()
+		update_later_pressed.emit())
+	row.add_child(later)
+
+
+func _toggle_update() -> void:
+	_update_on = not _update_on
+	_paint_update_button()
+	if not _applying_prefs:
+		update_toggled.emit(_update_on)
+
+
+func _paint_update_button() -> void:
+	if _s_update_button != null:
+		_s_update_button.text = "更新检查：开" if _update_on else "更新检查：关"
+
+
+func set_update_enabled(on: bool) -> void:
+	_update_on = on
+	_paint_update_button()
+
+
+func set_app_version(v: String) -> void:
+	if _update_version_label != null:
+		_update_version_label.text = "当前版本 v%s" % v
+
+
+func set_update_status(text: String, color := Color(1, 1, 1, 0.45)) -> void:
+	if _update_status_label != null:
+		_update_status_label.text = text
+		_update_status_label.add_theme_color_override("font_color", color)
+
+
+func show_update_found(latest: String) -> void:
+	if _update_overlay == null:
+		return
+	_update_title.text = "发 现 新 版 本"
+	_update_body.text = "当前 v%s，最新 v%s。\n是否现在下载更新？" % [UpdateFeedScript.current_version(), latest]
+	_update_download_btn.visible = true
+	_update_download_btn.disabled = false
+	_update_retry_btn.visible = false
+	_update_browser_btn.visible = false
+	_update_overlay.visible = true
+
+
+func show_update_error(msg: String) -> void:
+	if _update_overlay == null:
+		return
+	_update_title.text = "检 查 更 新 失 败"
+	_update_body.text = msg
+	_update_download_btn.visible = false
+	_update_retry_btn.visible = true
+	_update_browser_btn.visible = true
+	_update_overlay.visible = true
+
+
+func show_update_note(msg: String, retry := false) -> void:
+	if _update_overlay == null:
+		return
+	_update_title.text = "更 新"
+	_update_body.text = msg
+	_update_download_btn.visible = false
+	_update_retry_btn.visible = retry
+	_update_browser_btn.visible = retry
+	_update_overlay.visible = true
+
+
+func hide_update_dialog() -> void:
+	if _update_overlay != null:
+		_update_overlay.visible = false
+
+
+func _build_help() -> void:
+	var pair := _page_base()
+	_help_overlay = pair[0]
+	var center: CenterContainer = pair[1]
+	var vb := _page_card(center, 880)
+	_page_head(vb, "玩 法 说 明", "基础 · 地图 · 道具 · 事件", show_settings)
+
+	_help_scroll = ScrollContainer.new()
+	_help_scroll.custom_minimum_size = Vector2(0, 470)
+	_help_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(_help_scroll)
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 6)
+	_help_scroll.add_child(box)
+
+	_help_section(box, "基础规则")
+	for line in [
+		"棋盘是环形跑道：棋子从基地出发，绕场一周后进入终点跑道，四枚棋子全部到达终点即获胜。",
+		"出基地：必须掷出 6 点（原始骰面为 6；场景修正后为 6 也可以）。掷出 6 点后本回合还能再掷一次。",
+		"进终点：点数必须正好，多出来的点数不能走，该棋子本回合留在原地。",
+		"安全格：每 4 格出现一个，停在上面会获得护盾，护盾可以免疫一次被吃棋。",
+		"吃棋：落到对手棋子所在的格子会把它吃回基地；开启「吃棋对决」后先猜拳，输或平则攻击方退回原位。",
+		"场地格：宝箱格抽道具，问号格触发特殊事件，传送门与荆棘各有独立效果。",
+		"场景规则可以在「设置 → 场景规则」整体关闭；关闭后 8 套地图只保留外观。",
+	]:
+		_help_line(box, line)
+
+	_help_section(box, "八张地图的特殊规则")
+	for i in THEME_NAMES.size():
+		_help_line(box, "%s：%s" % [THEME_NAMES[i], HELP_THEME_RULES[i]])
+
+	_help_section(box, "道具")
+	for id in ITEM_INFO:
+		var info: Array = ITEM_INFO[id]
+		_help_line(box, "%s：%s" % [info[0], HELP_ITEM_DESC.get(id, info[1])])
+
+	_help_section(box, "特殊事件")
+	for e in HELP_EVENTS:
+		_help_line(box, "%s：%s" % [e[0], e[1]])
+
+
+func _help_section(box: VBoxContainer, title: String) -> void:
+	box.add_child(_spacer(6))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var bar := ColorRect.new()
+	bar.color = GOLD
+	bar.custom_minimum_size = Vector2(4, 18)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(bar)
+	row.add_child(_label(title, 17, GOLD))
+	box.add_child(row)
+
+
+func _help_line(box: VBoxContainer, text: String) -> void:
+	var l := _label(text, 13, Color(0.88, 0.9, 0.96))
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(l)
+
+
+func show_help() -> void:
+	_hide_pages()
+	_help_overlay.visible = true
+	_hide_game_nodes()
+	if _help_scroll != null:
+		_help_scroll.scroll_vertical = 0
 
 
 ## 打开存档槽选择页：records 来自 Main._save_records()
@@ -2048,7 +2452,7 @@ func set_lan_rooms(rooms: Array) -> void:
 		row.add_child(info)
 		var host_name := String(r.get("host", ""))
 		info.add_child(_label("房号 %s%s" % [String(r.get("room", "")), " · " + host_name if host_name != "" else ""], 14, TEXT))
-		info.add_child(_label("%s · %d/2 人 · %d 格棋盘" % [String(r.get("ip", "")), int(r.get("players", 1)), int(r.get("cells", 40))], 11, Color(1, 1, 1, 0.42)))
+		info.add_child(_label("%s · %d/4 人 · %d 格棋盘" % [String(r.get("ip", "")), int(r.get("players", 1)), int(r.get("cells", 40))], 11, Color(1, 1, 1, 0.42)))
 		var join := _btn("加入", Vector2(88, 38), 15)
 		var ip := String(r.get("ip", ""))
 		var room := String(r.get("room", ""))
@@ -2061,12 +2465,111 @@ func set_lan_hosting(text: String) -> void:
 	_lan_host_info.text = text
 	_lan_host_btn.disabled = true
 	_lan_leave_btn.visible = true
+	_lan_browse.visible = false
+
+
+## 大厅座位表：房主看管理按钮（踢人 / AI 开关 / 开始），客机看准备与离开
+func set_lan_lobby(lb: Dictionary, is_host: bool, my_seat: int) -> void:
+	_lan_is_host = is_host
+	_lan_my_seat = my_seat
+	_lan_in_room = true
+	_lan_lobby_panel.visible = true
+	_lan_browse.visible = false
+	_lan_host_box.visible = is_host
+	_lan_host_btn.disabled = true
+	_lan_leave_btn.visible = is_host
+	var host_name2 := String(lb.get("host", ""))
+	_lan_room_label.text = "房号 %s · 房主 %s" % [String(lb.get("room", "")), host_name2]
+	for c in _lan_seats_box.get_children():
+		c.queue_free()
+	var seat_rows: Array = lb.get("seats", [])
+	for s in 4:
+		var st: Dictionary = seat_rows[s] if s < seat_rows.size() else {"seat": s, "name": "AI 补位", "ai": true}
+		_lan_seats_box.add_child(_lan_seat_row(st))
+	var humans := 0
+	for st in seat_rows:
+		if bool(st.get("connected", false)):
+			humans += 1
+	_lan_room_label.text += " · %d/4 人" % humans
+	_lan_start_btn.visible = is_host
+	_lan_ready_btn.visible = not is_host
+	if is_host:
+		var can := bool(lb.get("can_start", true))
+		_lan_start_btn.disabled = not can
+		_lan_start_btn.text = "开 始 对 局" if can else "等待所有玩家准备…"
+	else:
+		var mine_ready := false
+		if my_seat >= 0 and my_seat < seat_rows.size():
+			mine_ready = bool(seat_rows[my_seat].get("ready", false))
+		_lan_ready_btn.text = "取消准备" if mine_ready else "准 备"
+
+
+func _lan_seat_row(st: Dictionary) -> PanelContainer:
+	var s := int(st.get("seat", 0))
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _flat(Color(1, 1, 1, 0.035), 10))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	panel.add_child(row)
+	var dot := _label("●", 16, CAST_TEAM_COLORS[clampi(s, 0, 3)])
+	dot.custom_minimum_size = Vector2(18, 0)
+	dot.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(dot)
+	var nm := String(st.get("name", "AI 补位"))
+	var title := "%d 号位 · %s" % [s + 1, nm]
+	if bool(st.get("host", false)):
+		title += "（房主）"
+	if s == _lan_my_seat and not _lan_is_host:
+		title += "（我）"
+	var name_l := _label(title, 14, TEXT)
+	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(name_l)
+	var state_text := "空闲"
+	var state_color := Color(1, 1, 1, 0.4)
+	if bool(st.get("connected", false)):
+		if bool(st.get("host", false)):
+			state_text = "房主"
+			state_color = GOLD
+		elif bool(st.get("ready", false)):
+			state_text = "已准备"
+			state_color = Color("8ff0c0")
+		else:
+			state_text = "未准备"
+			state_color = Color("ffb86b")
+	elif bool(st.get("ai", false)):
+		state_text = "AI 补位"
+		state_color = Color("9ec5ff")
+	var state_l := _label(state_text, 12, state_color)
+	state_l.custom_minimum_size = Vector2(62, 0)
+	state_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	state_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(state_l)
+	if _lan_is_host and s > 0:
+		if bool(st.get("connected", false)):
+			var kick := _btn("踢出", Vector2(66, 32), 13)
+			kick.add_theme_stylebox_override("normal", _btn_style(Color(0.45, 0.16, 0.18, 0.55), Color(1, 1, 1, 0.18), 10))
+			kick.pressed.connect(func(): lan_kick_pressed.emit(s))
+			row.add_child(kick)
+		else:
+			var ai_on := bool(st.get("ai", true))
+			var ai := _btn("AI：开" if ai_on else "AI：关", Vector2(76, 32), 13)
+			ai.pressed.connect(func(): lan_seat_ai_pressed.emit(s, not ai_on))
+			row.add_child(ai)
+	return panel
 
 
 func set_lan_idle() -> void:
-	_lan_host_info.text = "创建后房号会自动出现在对方房间列表里"
+	_lan_host_info.text = "创建后房号会自动出现在附近房间列表里"
 	_lan_host_btn.disabled = false
 	_lan_leave_btn.visible = false
+	_lan_lobby_panel.visible = false
+	_lan_browse.visible = true
+	_lan_host_box.visible = true
+	_lan_start_btn.visible = false
+	_lan_ready_btn.visible = false
+	_lan_in_room = false
+	_lan_my_seat = -1
 
 
 func hide_start() -> void:
@@ -2107,6 +2610,9 @@ func prefs() -> Dictionary:
 		"pick_visible": _pick_visible,
 		"items_open": _items_open,
 		"duel": _duel_on,
+		"rules": _rules_on,
+		"update": _update_on,
+		"player": _lan_player_name,
 	}
 
 
@@ -2143,6 +2649,16 @@ func apply_prefs(p: Dictionary) -> void:
 	if p.has("duel"):
 		_duel_on = bool(p["duel"])
 		_paint_duel_button()
+	if p.has("rules"):
+		_rules_on = bool(p["rules"])
+		_paint_rules_button()
+	if p.has("update"):
+		_update_on = bool(p["update"])
+		_paint_update_button()
+	if p.has("player") and String(p["player"]).strip_edges() != "":
+		_lan_player_name = String(p["player"]).strip_edges()
+		if _lan_name_edit != null:
+			_lan_name_edit.text = _lan_player_name
 	_applying_prefs = false
 
 

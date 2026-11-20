@@ -111,6 +111,43 @@ var game_over := false
 var winner := -1
 var auto_mode := false
 var shot_path := ""
+var _shot_delay := 0.0
+## 截图调试：--camzoom=距离:俯角 / --camlook=x:y:z 覆盖默认取景（只影响截图，不改玩法）
+var _shot_cam_custom := false
+var _shot_cam_dist := 0.0
+var _shot_cam_pitch := 0.0
+var _shot_cam_look := Vector3.ZERO
+## 演出镜头：吃棋特写 / 换场景重铸时临时接管取景，结束后回到原来的取景
+var _cine_active := false
+var _cine_t := 0.0
+var _cine_dur := 0.0
+var _cam_home: Dictionary = {}
+var _cine_ft := Vector3.ZERO
+var _cine_tt := Vector3.ZERO
+var _cine_fy := 0.0
+var _cine_ty := 0.0
+var _cine_fp := 0.0
+var _cine_tp := 0.0
+var _cine_fd := 0.0
+var _cine_td := 0.0
+var _theme_swapping := false
+## 各场景重铸时的高光色，用于屏幕闪光与地面涟漪
+const THEME_ACCENT := {
+	"cozy": Color("a7d97a"), "dusk": Color("ffb26b"), "frost": Color("a8e6ff"),
+	"ember": Color("ff7a3c"), "jade": Color("8ff0c0"), "void": Color("c8b8ff"),
+	"dune": Color("ffd166"), "clock": Color("e8c070"),
+}
+## 场景规则：每套场景一条独有、对双方一致的规则（M 批）
+const THEME_RULE_TEXT := {
+	"cozy": "牧野微风：掷骰点数 +1",
+	"dusk": "云梯：出基地直接落在第 2 格",
+	"frost": "冰面滑行：停稳后再滑 1 格",
+	"ember": "灼热地面：停在 3 的倍数格会被烫退 1 格",
+	"jade": "丛林捷径：点数最低按 3 算",
+	"void": "虚空裂隙：20% 概率再前进 1 格",
+	"dune": "流沙陷足：掷骰点数 -1",
+	"clock": "齿轮咬合：停在 4 的倍数格再前进 1 格",
+}
 var showcase := false
 var menu_mode := false
 
@@ -162,9 +199,14 @@ var _amb_streams: Dictionary = {}
 const SfxScript := preload("res://src/Sfx.gd")
 const SaveStoreScript := preload("res://src/SaveStore.gd")
 const LanScript := preload("res://src/Lan.gd")
+const UpdateFeedScript := preload("res://src/Update.gd")
 var sfx: Node = null
 var _sfx_on := true
 var _music_on := true
+## 场景规则（M 批）总开关：关闭后所有场景回到纯掷骰走格
+var rules_enabled := true
+## 玩家名：局域网大厅与房主房间名共用，随设置一起持久化
+var player_name := "骑士"
 var _cli_theme := false
 var _cli_cells := false
 var _saved_prefs: Dictionary = {}
@@ -177,6 +219,7 @@ var _selftest_save := false
 var _selftest_swap := false
 var _selftest_save_slots := false
 var _selftest_duel := false
+var _selftest_rules := false
 ## 自测专用：0 正常随机，1 强制胜，2 强制负
 var _duel_force := 0
 var _debug_load := -1
@@ -184,12 +227,25 @@ var _cli_lan_host := false
 var _cli_lan_join := ""
 var _cli_lan_ip := ""
 var _cli_lan_autoquit := false
+var _cli_lan_nostart := false
+var _cli_lan_start_delay := 0.0
 var lan: Node = null
+var update_feed: Node = null
+## 更新检查：开关持久化；进入设置时若开启则检查一次（60 秒内不重复）
+var update_enabled := true
+var _update_busy := false
+var _update_last_ms := 0
+var _update_latest := ""
+var _update_file: Dictionary = {}
+var _update_demo := ""
+var _selftest_update := false
+var _plugin_wired := false
 var _net_dirty := false
 var _net_push_ms := 0
 var _net_pick_hint := ""
 var _lan_testplay := -1
 var _lan_last_sig := ""
+var _guest_roulette_tok := 0
 ## 吃棋对决：开启后先玩一局石头剪刀布，输/平则攻击方退回吃棋前的格子
 var duel_enabled := false
 var _duel_active := false
@@ -220,12 +276,22 @@ func _ready() -> void:
 	for a in all_args:
 		if a.begins_with("--shot="):
 			shot_path = a.substr(7)
+		elif a.begins_with("--shot-delay="):
+			_shot_delay = float(a.substr(13))
 		elif a.begins_with("--theme="):
 			theme_id = a.substr(8)
 			_cli_theme = true
 		elif a.begins_with("--cells="):
 			board_cells = clampi(int(a.substr(8)), 20, 60)
 			_cli_cells = true
+		elif a.begins_with("--camzoom="):
+			var zs: PackedStringArray = String(a).substr(10).split(":")
+			_shot_cam_dist = float(zs[0])
+			_shot_cam_pitch = deg_to_rad(float(zs[1]))
+			_shot_cam_custom = true
+		elif a.begins_with("--camlook="):
+			var ls: PackedStringArray = String(a).substr(10).split(":")
+			_shot_cam_look = Vector3(float(ls[0]), float(ls[1]), float(ls[2]))
 		elif a == "--auto":
 			auto_mode = true
 		elif a == "--showcase":
@@ -242,6 +308,12 @@ func _ready() -> void:
 			_selftest_save_slots = true
 		elif a == "--selftest-duel":
 			_selftest_duel = true
+		elif a == "--selftest-rules":
+			_selftest_rules = true
+		elif a == "--selftest-update":
+			_selftest_update = true
+		elif a.begins_with("--update-demo="):
+			_update_demo = a.substr(14)
 		elif a.begins_with("--load="):
 			_debug_load = int(a.substr(7))
 		elif a == "--lan-host":
@@ -252,6 +324,10 @@ func _ready() -> void:
 			_cli_lan_ip = a.substr(9)
 		elif a == "--lan-autoquit":
 			_cli_lan_autoquit = true
+		elif a == "--lan-nostart":
+			_cli_lan_nostart = true
+		elif a.begins_with("--lan-start-delay="):
+			_cli_lan_start_delay = float(a.substr(18))
 		elif a.begins_with("--lan-testplay="):
 			_lan_testplay = int(a.substr(14))
 
@@ -266,6 +342,10 @@ func _ready() -> void:
 	lan = LanScript.new()
 	lan.name = "Lan"
 	add_child(lan)
+	update_feed = UpdateFeedScript.new()
+	update_feed.name = "UpdateFeed"
+	add_child(update_feed)
+	update_feed.check_finished.connect(_on_update_checked)
 	_setup_hud()
 	_lan_wire()
 
@@ -286,6 +366,12 @@ func _ready() -> void:
 				hud.show_load(_save_records())
 			"settings":
 				hud.show_settings()
+				if _update_demo != "":
+					hud.show_update_found(_update_demo)
+				else:
+					_maybe_check_update()
+			"help":
+				hud.show_help()
 			"lan":
 				hud.show_lan()
 
@@ -305,9 +391,21 @@ func _ready() -> void:
 		_run_duel_selftest()
 		return
 
+	if _selftest_rules:
+		_run_rules_selftest()
+		return
+
+	if _selftest_update:
+		_run_update_selftest()
+		return
+
 	if _cli_lan_host:
 		hud.show_lan()
 		_lan_host_clicked()
+		if _cli_lan_start_delay > 0.0:
+			await get_tree().create_timer(_cli_lan_start_delay).timeout
+			if not match_started:
+				_lan_start_clicked()
 	elif _cli_lan_join != "":
 		hud.show_lan()
 		_lan_join_clicked(_cli_lan_ip, _cli_lan_join)
@@ -330,6 +428,10 @@ func _ready() -> void:
 			arena.roulette_blast(Vector3(0, BOARD_Y, 0), bc)
 			hud.screen_flash(bc, 0.5)
 			await get_tree().create_timer(0.4).timeout
+		if all_args.has("--reforge"):
+			# 截图调试：触发一次场景切换重铸演出，拍中段
+			_theme_swap(theme_id)
+			await get_tree().create_timer(0.30).timeout
 		if all_args.has("--fxdemo-capture"):
 			# 截图调试：把两枚棋子摆到一起，连拍吃棋动画
 			var na: Node3D = pieces[0]["node"]
@@ -337,6 +439,7 @@ func _ready() -> void:
 			var base: Vector3 = _pt_pos(paths[0][clampi(10, 0, FIELDS - 1)])
 			na.position = base
 			nb.position = base + Vector3(26, 0, 8)
+			_cine_aim(na.position, nb.position)
 			arena.capture_stomp(na, nb, TEAM_COLORS[0])
 			await _fx_frame_burst(shot_path, 8, 0.22)
 			return
@@ -355,6 +458,8 @@ func _ready() -> void:
 			_play_item_fx(p0, fxid, p1, {})
 			await _fx_frame_burst(shot_path, 8, 0.22)
 			return
+		if _shot_delay > 0.0:
+			await get_tree().create_timer(_shot_delay).timeout
 		await _take_screenshot()
 
 
@@ -470,15 +575,29 @@ func _setup_camera() -> void:
 
 
 ## 相机默认取景：按可玩区外接半径取景，让环道/基地尽量占满屏幕且不出屏
+## 取景俯角随场景变化：开阔场景压低镜头露出天空/云海，封闭场景压低镜头看见墙与洞顶
+const THEME_PITCH := {
+	"cozy": 44.0, "dusk": 46.0, "frost": 43.0, "ember": 45.0,
+	"jade": 42.0, "void": 47.0, "dune": 41.0, "clock": 44.0,
+}
+
+
 func _fit_camera() -> void:
+	_cine_active = false
+	_cam_home.clear()
 	cam_yaw = deg_to_rad(34.0)
-	cam_pitch = deg_to_rad(50.0)
+	cam_pitch = deg_to_rad(float(THEME_PITCH.get(theme_id, 50.0)))
 	var grow := float(FIELDS) / float(BASE_FIELDS)
 	# 取景公式：可见竖向世界高度 = 2*d*tan(fov/2)；棋盘投影竖向高度 ≈ 2*R*sin(pitch)。
 	# R≈1250（环道 940 + 基地外沿），fov 34° 时留约 8% 安全边，d 取 3040 起随格数放大。
 	cam_dist = 3040.0 * (1.0 + 0.55 * (grow - 1.0))
 	# 目标点向相机侧平移，整体画面上移，避开底部道具栏与骰子提示
 	cam_target = Vector3(0, 40.0, 0) + Vector3(sin(cam_yaw), 0.0, cos(cam_yaw)) * 85.0
+	if _shot_cam_custom:
+		cam_dist = _shot_cam_dist
+		cam_pitch = _shot_cam_pitch
+		if _shot_cam_look != Vector3.ZERO:
+			cam_target = _shot_cam_look
 	_update_camera()
 
 
@@ -490,6 +609,77 @@ func _update_camera() -> void:
 	) * cam_dist
 	camera.position = cam_target + offset
 	camera.look_at(cam_target, Vector3.UP)
+
+
+# ---------------------------------------------------------------- 演出镜头
+
+## 从当前位置平滑推到目标取景（目标点 / 偏航 / 俯角 / 距离）
+func _cine_to(to_target: Vector3, to_yaw: float, to_pitch: float, to_dist: float, dur: float) -> void:
+	_cine_ft = cam_target
+	_cine_tt = to_target
+	_cine_fy = cam_yaw
+	_cine_ty = to_yaw
+	_cine_fp = cam_pitch
+	_cine_tp = to_pitch
+	_cine_fd = cam_dist
+	_cine_td = to_dist
+	_cine_t = 0.0
+	_cine_dur = maxf(dur, 0.01)
+	_cine_active = true
+
+
+func _cine_advance(delta: float) -> void:
+	_cine_t = minf(_cine_t + delta, _cine_dur)
+	var k := smoothstep(0.0, 1.0, _cine_t / _cine_dur)
+	cam_target = _cine_ft.lerp(_cine_tt, k)
+	cam_yaw = lerpf(_cine_fy, _cine_ty, k)
+	cam_pitch = lerpf(_cine_fp, _cine_tp, k)
+	cam_dist = lerpf(_cine_fd, _cine_td, k)
+	_update_camera()
+	if _cine_t >= _cine_dur:
+		_cine_active = false
+
+
+## 吃棋特写：对准攻守双方中点，拉近并压低视线，让踩踏动作占住画面
+func _cine_aim(a_pos: Vector3, b_pos: Vector3, dur := 0.30) -> void:
+	if _cam_home.is_empty():
+		_cam_home = {"target": cam_target, "yaw": cam_yaw, "pitch": cam_pitch, "dist": cam_dist}
+	var mid := (a_pos + b_pos) * 0.5
+	_cine_to(mid + Vector3(0, 76.0, 0), cam_yaw, deg_to_rad(22.0),
+		clampf(cam_dist * 0.30, 700.0, 980.0), dur)
+
+
+## 特写结束，回到特写前的取景
+func _cine_restore(dur := 0.45) -> void:
+	if _cam_home.is_empty():
+		return
+	_cine_to(_cam_home["target"], _cam_home["yaw"], _cam_home["pitch"], _cam_home["dist"], dur)
+	_cam_home.clear()
+
+
+## 场景切换：世界重铸 —— 高光闪 + 地面涟漪 + 镜头轻推远再回位
+func _theme_swap(id: String) -> void:
+	if _theme_swapping:
+		return
+	_theme_swapping = true
+	var accent: Color = THEME_ACCENT.get(id, Color("f6ecd2"))
+	theme_id = id
+	arena.set_theme(id)
+	_fit_camera()
+	_apply_theme_audio()
+	hud.screen_flash(accent.lightened(0.55), 0.16)
+	_shake(0.16, 5.0)
+	arena.pulse(Vector3(0, BOARD_Y, 0), accent)
+	arena.pulse(Vector3(0, BOARD_Y, 0), accent.lightened(0.35))
+	arena.fx_sound("ui_reforge", 0.0, 1.0)
+	hud.show_item_toast("场景规则", String(THEME_RULE_TEXT.get(id, "")), accent)
+	# 镜头往外呼一口再回来，交代“整块场地被换掉”
+	var base := cam_dist
+	_cine_to(cam_target, cam_yaw, cam_pitch, clampf(base * 1.10, 900.0, 4600.0), 0.32)
+	await get_tree().create_timer(0.34).timeout
+	_cine_to(cam_target, cam_yaw, cam_pitch, base, 0.62)
+	await get_tree().create_timer(0.86).timeout
+	_theme_swapping = false
 
 
 func _setup_audio() -> void:
@@ -508,11 +698,14 @@ func _setup_audio() -> void:
 	sfx_win = _make_player("res://assets/sounds/sfx_win.wav", -6.0)
 	sfx_drop = _make_player("res://assets/sounds/sfx_drop.wav", -7.0)
 	_amb_streams = {
+		"cozy": load("res://assets/sounds/amb_cozy.wav"),
 		"dusk": load("res://assets/sounds/amb_dusk.wav"),
 		"frost": load("res://assets/sounds/amb_frost.wav"),
 		"ember": load("res://assets/sounds/amb_ember.wav"),
 		"jade": load("res://assets/sounds/amb_jade.wav"),
 		"void": load("res://assets/sounds/amb_void.wav"),
+		"dune": load("res://assets/sounds/amb_dune.wav"),
+		"clock": load("res://assets/sounds/amb_clock.wav"),
 	}
 	for k in _amb_streams.keys():
 		_prepare_loop(_amb_streams[k])
@@ -589,10 +782,7 @@ func _setup_hud() -> void:
 	hud.start_pressed.connect(_start_match)
 	hud.roulette_tick.connect(func(): _play(sfx_tick))
 	hud.theme_previewed.connect(func(id: String): arena.set_theme(id))
-	hud.theme_selected.connect(func(id: String):
-		theme_id = id
-		arena.set_theme(id)
-		_apply_theme_audio())
+	hud.theme_selected.connect(func(id: String): _theme_swap(id))
 	hud.sound_toggled.connect(func(on: bool):
 		_sfx_on = on
 		if sfx != null:
@@ -604,7 +794,9 @@ func _setup_hud() -> void:
 	# 启动画面 → 四个入口
 	hud.home_create.connect(func(): hud.show_start())
 	hud.home_load.connect(func(): hud.show_load(_save_records()))
-	hud.home_settings.connect(func(): hud.show_settings())
+	hud.home_settings.connect(func():
+		hud.show_settings()
+		_maybe_check_update())
 	hud.home_lan.connect(func(): hud.show_lan())
 	hud.save_pressed.connect(_manual_save)
 	hud.save_slot_pressed.connect(_on_save_slot)
@@ -612,12 +804,43 @@ func _setup_hud() -> void:
 	hud.delete_slot_pressed.connect(_delete_slot)
 	hud.duel_chosen.connect(_on_duel_chosen)
 	hud.duel_toggled.connect(_on_duel_toggled)
+	hud.rules_toggled.connect(func(on: bool):
+		rules_enabled = on
+		_save_prefs())
+	hud.update_toggled.connect(func(on: bool):
+		update_enabled = on
+		_save_prefs()
+		if on:
+			_maybe_check_update())
+	hud.update_check_pressed.connect(_check_update)
+	hud.update_download_pressed.connect(_on_update_download)
+	hud.update_browser_pressed.connect(func():
+		if update_feed != null:
+			update_feed.open_share_page()
+		hud.hide_update_dialog())
+	hud.set_update_enabled(update_enabled)
+	hud.set_app_version(UpdateFeedScript.current_version())
 	hud.lan_host_pressed.connect(_lan_host_clicked)
 	hud.lan_join_pressed.connect(_lan_join_clicked)
 	hud.lan_leave_pressed.connect(_lan_leave_clicked)
 	hud.lan_refresh_pressed.connect(func():
 		if lan != null:
 			lan.refresh())
+	hud.lan_start_pressed.connect(_lan_start_clicked)
+	hud.lan_ready_pressed.connect(func(on: bool):
+		if lan != null:
+			lan.set_ready(on))
+	hud.lan_seat_ai_pressed.connect(func(seat: int, on: bool):
+		if lan != null:
+			lan.set_seat_ai(seat, on))
+	hud.lan_kick_pressed.connect(func(seat: int):
+		if lan != null:
+			lan.kick_seat(seat))
+	hud.lan_name_changed.connect(func(n: String):
+		player_name = n.strip_edges() if n.strip_edges() != "" else "骑士"
+		if lan != null:
+			lan.update_name(player_name)
+		_save_prefs())
 	# 套用上次保存的设定
 	if not _saved_prefs.is_empty():
 		var p := _saved_prefs.duplicate()
@@ -648,6 +871,9 @@ func _load_prefs() -> Dictionary:
 		"pick_visible": cf.get_value("game", "pick_visible", true),
 		"items_open": cf.get_value("game", "items_open", true),
 		"duel": cf.get_value("game", "duel", false),
+		"rules": cf.get_value("game", "rules", true),
+		"update": cf.get_value("game", "update", true),
+		"player": cf.get_value("game", "player", "骑士"),
 	}
 	# 开局前就要用到的字段（主题、棋盘、角色）先落到内存
 	if not _cli_theme and THEME_LABELS.has(String(p["theme"])):
@@ -662,6 +888,11 @@ func _load_prefs() -> Dictionary:
 	_sfx_on = bool(p["sound"])
 	_music_on = bool(p["music"])
 	duel_enabled = bool(p["duel"])
+	rules_enabled = bool(p["rules"])
+	update_enabled = bool(p["update"])
+	player_name = String(p["player"])
+	if player_name.strip_edges() == "":
+		player_name = "骑士"
 	return p
 
 
@@ -680,7 +911,133 @@ func _save_prefs() -> void:
 	cf.set_value("game", "pick_visible", p["pick_visible"])
 	cf.set_value("game", "items_open", p["items_open"])
 	cf.set_value("game", "duel", p["duel"])
+	cf.set_value("game", "rules", p.get("rules", rules_enabled))
+	cf.set_value("game", "update", p.get("update", update_enabled))
+	cf.set_value("game", "player", p.get("player", player_name))
 	cf.save(SAVE_PATH)
+
+
+# ---------------------------------------------------------------- 更新检查
+
+const UPDATE_MIN_INTERVAL_MS := 60000
+
+
+## Time.get_ticks_msec() 是引擎启动后的毫秒数，刚启动时会让节流误判，这里用系统时间
+func _now_ms() -> int:
+	return int(Time.get_unix_time_from_system() * 1000.0)
+
+
+## 进入设置时若开关为开则检查一次（60 秒内不重复）
+func _maybe_check_update() -> void:
+	if not update_enabled or _update_busy:
+		return
+	if _now_ms() - _update_last_ms < UPDATE_MIN_INTERVAL_MS:
+		return
+	_check_update()
+
+
+func _check_update() -> void:
+	if not update_enabled or _update_busy or update_feed == null:
+		return
+	_update_busy = true
+	if hud != null:
+		hud.set_update_status("正在检查更新…", Color(1, 1, 1, 0.55))
+	await update_feed.check()
+
+
+func _on_update_checked(result: Dictionary) -> void:
+	_update_busy = false
+	_update_last_ms = _now_ms()
+	var latest := String(result.get("latest", ""))
+	var err := String(result.get("error", ""))
+	if not bool(result.get("ok", false)):
+		print("UPDATE_FAIL error=%s" % err)
+		if hud != null:
+			hud.set_update_status("检查失败：%s" % err, Color("e0503f"))
+			hud.show_update_error("检查更新失败：\n%s\n\n可以稍后重试，或用浏览器打开分享页手动下载。" % err)
+		return
+	if latest != "":
+		_update_latest = latest
+		var f: Variant = result.get("file", {})
+		_update_file = f if f is Dictionary else {}
+		print("UPDATE_FOUND current=%s latest=%s file=%s size=%d entries=%d" % [
+			String(result.get("current", "")), latest,
+			String(_update_file.get("name", "")), int(_update_file.get("size", 0)),
+			int(result.get("entries", 0))])
+		if hud != null:
+			hud.set_update_status("发现新版本 v%s" % latest, Color("7cf0a8"))
+			hud.show_update_found(latest)
+		return
+	print("UPDATE_NONE current=%s entries=%d note=%s" % [
+		String(result.get("current", "")), int(result.get("entries", 0)), err])
+	if hud != null:
+		if err != "":
+			hud.set_update_status("未找到可用的安装包", Color("ffb84a"))
+			hud.show_update_note(err + "\n\n也可以用浏览器打开分享页手动下载。", true)
+		else:
+			hud.set_update_status("已是最新版本 v%s" % UpdateFeedScript.current_version())
+
+
+func _on_update_download() -> void:
+	if _update_file.is_empty():
+		hud.show_update_error("安装包信息缺失，请重新检查更新。")
+		return
+	hud.show_update_note("正在获取下载地址…")
+	var res: Dictionary = await update_feed.resolve_link(_update_file)
+	if not bool(res.get("ok", false)):
+		hud.show_update_error(String(res.get("error", "获取下载地址失败。")))
+		return
+	var url := String(res.get("url", ""))
+	var file_name := String(_update_file.get("name", "knight_update"))
+	if OS.has_feature("ios"):
+		OS.shell_open(url)
+		hud.show_update_note("已在浏览器中打开下载。\n文件会保存到「文件」App →「下载」文件夹，点按文件即可安装。", true)
+		return
+	if OS.has_feature("android"):
+		if Engine.has_singleton("KnightUpdate"):
+			var plugin: Object = Engine.get_singleton("KnightUpdate")
+			_wire_update_plugin(plugin)
+			plugin.call("downloadAndInstall", url, file_name)
+			hud.show_update_note("正在后台下载 %s…\n下载完成后会自动拉起系统安装器。" % file_name)
+			return
+		OS.shell_open(url)
+		hud.show_update_note("当前安装包未包含下载插件，已用浏览器打开下载链接。", true)
+		return
+	OS.shell_open(url)
+	hud.show_update_note("已在浏览器中打开下载链接。", true)
+
+
+## 安装插件只接线一次；插件用 emitSignal 回传下载/安装状态
+func _wire_update_plugin(plugin: Object) -> void:
+	if _plugin_wired:
+		return
+	_plugin_wired = true
+	plugin.connect("update_state", _on_plugin_update_state)
+
+
+func _on_plugin_update_state(stage: String, message: String) -> void:
+	if hud == null:
+		return
+	match stage:
+		"downloading":
+			hud.set_update_status(message, Color(1, 1, 1, 0.55))
+			hud.show_update_note(message)
+		"done", "install":
+			hud.set_update_status(message, Color("7cf0a8"))
+			hud.show_update_note(message, false)
+		"permission":
+			hud.show_update_note(message, false)
+		_:
+			hud.show_update_error(message)
+
+
+func _run_update_selftest() -> void:
+	print("SELFTEST_UPDATE start current=%s platform=%s" % [
+		UpdateFeedScript.current_version(), UpdateFeedScript.platform_folder()])
+	await update_feed.debug_dump()
+	var res: Dictionary = await update_feed.check()
+	print("SELFTEST_UPDATE result=", res)
+	get_tree().quit()
 
 
 # ---------------------------------------------------------------- 对局存档
@@ -729,6 +1086,7 @@ func _capture_state() -> Dictionary:
 		"game": {
 			"mode": game_mode, "ai_level": ai_level, "theme": theme_id,
 			"cells": board_cells, "styles": char_styles.duplicate(),
+			"rules": rules_enabled,
 			"human_teams": human_teams.duplicate(),
 			"active_teams": active_teams.duplicate(),
 		},
@@ -826,6 +1184,8 @@ func _apply_save(rec: Dictionary) -> void:
 	var g: Dictionary = rec.get("game", {})
 	var sec: Dictionary = rec.get("sections", {})
 	_restoring = true
+	if g.has("rules"):
+		rules_enabled = bool(g["rules"])
 	_start_match(
 		clampi(int(g.get("mode", 0)), 0, 2),
 		clampi(int(g.get("ai_level", 1)), 0, 2),
@@ -969,11 +1329,13 @@ func _lan_wire() -> void:
 		return
 	lan.rooms_changed.connect(func(rooms: Array): hud.set_lan_rooms(rooms))
 	lan.status.connect(func(text: String, color: Color): hud.set_lan_status(text, color))
+	lan.lobby_changed.connect(_on_lan_lobby)
 	lan.guest_joined.connect(_on_lan_guest_joined)
 	lan.guest_left.connect(_on_lan_guest_left)
 	lan.match_started.connect(_on_lan_match_start)
 	lan.state_received.connect(_on_lan_state)
 	lan.intent_received.connect(_on_lan_intent)
+	lan.fx_received.connect(_on_lan_fx)
 	lan.log_received.connect(func(text: String): hud.log(text))
 	lan.connected_to_host.connect(func(_info: Dictionary):
 		hud.set_lan_status("已连上房主，正在同步对局…", Color("8fe6ff")))
@@ -988,21 +1350,27 @@ func _lan_host_clicked(_name := "") -> void:
 		return
 	var cfg := {
 		"mode": 2, "theme": theme_id, "cells": board_cells,
-		"styles": char_styles.duplicate(), "host": "骑士飞行棋房主",
+		"styles": char_styles.duplicate(), "rules": rules_enabled,
+		"host": player_name,
 	}
-	if lan.start_host(cfg):
+	if lan.start_host(cfg, player_name):
 		hud.set_lan_hosting("房号 %s · %s:%d" % [lan.room_code, lan.local_ipv4(), lan.tcp_port])
-		hud.set_lan_status("房间已创建，等待对手加入（房号 %s）" % lan.room_code, Color("8fe6ff"))
+		hud.set_lan_status("房间已创建，等待玩家加入（房号 %s）" % lan.room_code, Color("8fe6ff"))
+		hud.set_lan_lobby(lan.lobby_snapshot(), true, 0)
 		print("LAN_HOST room=%s port=%d" % [lan.room_code, lan.tcp_port])
 
 
 func _lan_join_clicked(ip: String, room: String) -> void:
 	if lan == null:
 		return
+	# 调试/直连：只填了 IP 时把它当房主地址，房号留空由发现补齐
+	if ip == "" and room.contains("."):
+		ip = room
+		room = ""
 	if ip == "" and room == "":
 		hud.set_lan_status("先选择一个附近房间，或填写房主 IP 与房号", Color("ffb86b"))
 		return
-	lan.join(ip, room)
+	lan.join(ip, room, player_name)
 
 
 func _lan_leave_clicked() -> void:
@@ -1018,28 +1386,68 @@ func _lan_leave_clicked() -> void:
 	hud.show_lan()
 
 
+## 大厅快照：房主/客机共用同一份座位表，成员一入座立刻可见
+func _on_lan_lobby(lb: Dictionary) -> void:
+	if hud == null or match_started:
+		return
+	var is_host: bool = String(lb.get("role", lan.role if lan != null else "")) == "host"
+	hud.set_lan_lobby(lb, is_host, int(lb.get("you", 0)))
+	if _cli_lan_host:
+		var parts: Array = []
+		for st in lb.get("seats", []):
+			parts.append("%d:%s%s" % [int(st.get("seat", 0)) + 1, String(st.get("name", "")),
+				"*" if bool(st.get("ready", false)) else ""])
+		print("LAN_LOBBY ", " | ".join(parts), " can_start=", bool(lb.get("can_start", false)))
+	if is_host:
+		hud.set_lan_hosting("房号 %s · %s:%d" % [lan.room_code, lan.local_ipv4(), lan.tcp_port])
+
+
 func _on_lan_guest_joined(info: Dictionary) -> void:
 	if net_role == "guest":
 		return
-	var rejoin: bool = bool(info.get("reconnect", false)) and match_started and game_mode == 2
-	net_role = "host"
-	net_guest_team = 1
-	if not rejoin:
-		_start_match(2, 1, theme_id, board_cells, char_styles)
-		human_teams = [0, 1]
-		active_teams = [0, 1]
-		game_mode = 2
-		net_role = "host"
-	hud.hide_start()
-	_net_dirty = false
-	lan.send_start(_net_payload())
-	if not rejoin:
-		_log("对手已加入，开始局域网对局")
-		hud.show_item_toast("联机开始", "你执红队，对手执蓝队", TEAM_COLORS[0])
+	var nm := String(info.get("name", "玩家"))
+	if bool(info.get("reconnect", false)):
+		hud.show_item_toast("玩家回座", nm, Color("8fe6ff"))
+		if match_started:
+			lan.send_resume(int(info.get("seat", 1)), _net_payload())
 	else:
-		_log("对手已回座")
-		hud.show_item_toast("对手已回座", "对局从断开处继续", Color("8fe6ff"))
-	if _lan_testplay > 0 and not rejoin:
+		hud.show_item_toast("玩家加入", "%s 已入座 %d 号位" % [nm, int(info.get("seat", 1)) + 1], Color("8fe6ff"))
+	_log("%s %s" % [nm, "回到房间" if bool(info.get("reconnect", false)) else "加入了房间"])
+	# 联机自测：房主收到客机后自动开局，无需手动点开始
+	if _cli_lan_host and not _cli_lan_nostart and not match_started:
+		_lan_start_clicked()
+
+
+## 房主点「开始对局」：按座位表组装人类队伍，空位 AI 补位
+func _lan_start_clicked() -> void:
+	if lan == null or lan.role != "host":
+		return
+	var humans: Array = [0]
+	var act: Array = []
+	for s in 4:
+		if s == 0:
+			act.append(0)
+			continue
+		var st: Dictionary = lan.seats[s] if s < lan.seats.size() else {}
+		if bool(st.get("connected", false)):
+			humans.append(s)
+			act.append(s)
+		elif bool(st.get("ai", true)):
+			act.append(s)
+	if act.is_empty():
+		act = [0]
+	net_role = "host"
+	_start_match(2, 1, theme_id, board_cells, char_styles)
+	human_teams = humans
+	active_teams = act
+	net_role = "host"
+	_net_dirty = false
+	lan.start_match(_net_payload())
+	hud.hide_start()
+	_log("局域网对局开始 · %d 名玩家 · %d 席 AI" % [humans.size(), act.size() - humans.size()])
+	hud.show_item_toast("联机开始", "你执红队 · %d 人 + %d AI" % [humans.size(), act.size() - humans.size()],
+		TEAM_COLORS[0])
+	if _lan_testplay > 0:
 		_lan_testplay_loop()
 
 
@@ -1070,10 +1478,26 @@ func _state_signature() -> String:
 	return s.md5_text().substr(0, 10)
 
 
-func _on_lan_guest_left() -> void:
+func _on_lan_guest_left(info: Dictionary) -> void:
 	if net_role != "host":
 		return
-	hud.show_item_toast("对手断开", "保留房间 60 秒等待回座，可继续本地操作", Color("ffb86b"))
+	var nm := String(info.get("name", "玩家"))
+	var s := int(info.get("seat", 1))
+	hud.show_item_toast("%s 断开" % nm, "%d 号座由 AI 接管，60 秒内可回座" % (s + 1), Color("ffb86b"))
+	# 如果正好轮到他且停在选棋阶段，立刻替他走完，避免对局卡死
+	if match_started and not game_over and current_team == s:
+		if awaiting_pick and not _pick_pool.is_empty():
+			var pick := int(_pick_pool[0])
+			awaiting_pick = false
+			_pick_pool = []
+			_pick_options = []
+			hud.hide_pick()
+			arena.clear_piece_marks()
+			arena.clear_marks()
+			arena.clear_movable()
+			await _move_piece(pick, pending_total)
+		elif not busy:
+			_maybe_ai_turn()
 
 
 func _on_lan_match_start(payload: Dictionary) -> void:
@@ -1081,7 +1505,9 @@ func _on_lan_match_start(payload: Dictionary) -> void:
 	net_guest_team = int(lan.seat)
 	_apply_net(payload)
 	hud.hide_start()
-	hud.show_item_toast("联机开始", "你执蓝队，等待房主行动", TEAM_COLORS[1])
+	var seat_label: String = TEAM_NAMES[clampi(net_guest_team, 0, 3)]
+	hud.show_item_toast("联机开始", "你执%s，等待轮到你行动" % seat_label,
+		TEAM_COLORS[clampi(net_guest_team, 0, 3)])
 	print("LAN_JOINED seat=", net_guest_team, " cells=", board_cells)
 	if _lan_testplay > 0:
 		_lan_testplay_loop()
@@ -1097,12 +1523,15 @@ func _on_lan_state(payload: Dictionary) -> void:
 
 
 func _on_lan_intent(p: Dictionary) -> void:
+	if net_role != "host":
+		return
+	var actor := int(p.get("seat", -1))
 	# 对决出拳要抢在 busy 判定之前：房主此时正阻塞等待客机出拳
 	if String(p.get("a", "")) == "duel":
-		if net_role == "host" and _duel_active:
+		if _duel_active and actor == _duel_team:
 			_duel_pick = clampi(int(p.get("pick", 0)), 0, 2)
 		return
-	if net_role != "host" or current_team != net_guest_team:
+	if current_team != actor:
 		return
 	if busy or game_over or not match_started:
 		return
@@ -1126,6 +1555,7 @@ func _on_lan_link_lost(final: bool) -> void:
 	match_started = false
 	game_over = false
 	busy = false
+	hud.set_lan_idle()
 	hud.show_lan()
 	hud.set_lan_status("与房主的连接已断开，请重新加入", Color("ff6b6b"))
 
@@ -1159,6 +1589,9 @@ func _net_payload() -> Dictionary:
 ## 客机应用房主快照：只显示，不自行计算
 func _apply_net(st: Dictionary) -> void:
 	var g: Dictionary = st.get("game", {})
+	# 规则开关跟随房主，双方看到的规则说明一致
+	if g.has("rules"):
+		rules_enabled = bool(g["rules"])
 	var need_rebuild := (not match_started) or int(g.get("cells", board_cells)) != board_cells \
 		or String(g.get("theme", theme_id)) != theme_id
 	_restoring = true
@@ -1219,7 +1652,9 @@ func _apply_net(st: Dictionary) -> void:
 			"掷骰 %d 次 · 吃子 %d 次" % [rolls[winner], captures[winner]])
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _cine_active:
+		_cine_advance(delta)
 	if net_role != "host" or lan == null or not _net_dirty:
 		return
 	var now := Time.get_ticks_msec()
@@ -1237,6 +1672,103 @@ func _net_push_now() -> void:
 	_net_push_ms = Time.get_ticks_msec()
 	_net_dirty = false
 	lan.send_state(_net_payload())
+
+
+## 房主 → 客机的过程演出；只走表现，不改变权威状态
+func _net_fx(kind: String, data: Dictionary) -> void:
+	if net_role == "host" and lan != null:
+		lan.send_fx(kind, data)
+
+
+## 棋子每次移动后同步一次落点，客机据此补间，而不是等最终快照瞬移
+func _net_piece_sync(p: Dictionary) -> void:
+	if net_role != "host" or lan == null:
+		return
+	lan.send_fx("hop", {
+		"i": int(p["team"]) * PIECES_PER_TEAM + int(p["idx"]),
+		"cell": int(p.get("cell", -1)),
+		"lane": int(p.get("lane", -1)),
+		"lslot": int(p.get("lslot", 0)),
+		"fin": bool(p.get("finished", false)),
+	})
+
+
+func _toast(title: String, desc: String, color: Color) -> void:
+	hud.show_item_toast(title, desc, color)
+	_net_fx("toast", {"title": title, "desc": desc, "color": color.to_html(false)})
+
+
+func _event_banner(title: String, desc: String, color: Color) -> void:
+	hud.show_event(title, desc, color)
+	_net_fx("event", {"title": title, "desc": desc, "color": color.to_html(false)})
+
+
+## 客机收到房主演出：只操作本地表现层，不参与任何判定
+func _on_lan_fx(kind: String, d: Dictionary) -> void:
+	if net_role != "guest":
+		return
+	if _lan_testplay > 0:
+		print("LAN_FX ", kind)
+	match kind:
+		"dice":
+			var raw := clampi(int(d.get("raw", 0)), 0, 6)
+			var total := clampi(int(d.get("total", raw)), 0, 12)
+			last_dice = raw
+			pending_total = total
+			hud.set_dice(raw, total)
+			arena.roll_dice(raw)
+		"move":
+			var mi := int(d.get("i", -1))
+			if mi >= 0 and mi < pieces.size():
+				arena.select_piece(pieces[mi]["node"])
+		"hop":
+			var gi := int(d.get("i", -1))
+			if gi < 0 or gi >= pieces.size():
+				return
+			var p: Dictionary = pieces[gi]
+			p["cell"] = int(d.get("cell", -1))
+			p["lane"] = int(d.get("lane", -1))
+			p["lslot"] = int(d.get("lslot", 0))
+			p["finished"] = bool(d.get("fin", false))
+			var to := Vector3.ZERO
+			if int(p["lane"]) >= 0:
+				to = _goal_pos(int(p["lane"]), int(p["lslot"]))
+			elif int(p["cell"]) >= 0:
+				to = _piece_cell_pos(p)
+			else:
+				to = _pt_pos("HM%d_%d" % [int(p["team"]) + 1, int(p["idx"]) + 1])
+			var node: Node3D = p["node"]
+			var tw := create_tween()
+			tw.set_trans(Tween.TRANS_SINE)
+			tw.tween_property(node, "position", to, 0.18)
+		"toast":
+			hud.show_item_toast(String(d.get("title", "")), String(d.get("desc", "")),
+				Color.from_string(String(d.get("color", "")), Color.WHITE))
+		"event":
+			hud.show_event(String(d.get("title", "")), String(d.get("desc", "")),
+				Color.from_string(String(d.get("color", "")), Color.WHITE))
+		"roulette":
+			var segs: Array = []
+			for s in d.get("segs", []):
+				if s is Dictionary:
+					segs.append({
+						"label": String(s.get("label", "?")),
+						"color": Color.from_string(String(s.get("color", "")), Color.WHITE),
+					})
+			if not segs.is_empty():
+				_guest_roulette_tok += 1
+				hud.show_roulette(segs, String(d.get("kind", "item")))
+				hud.lock_roulette()
+		"roulette_result":
+			hud.spin_roulette(int(d.get("idx", 0)))
+		"roulette_hide":
+			var tok := _guest_roulette_tok
+			await get_tree().create_timer(2.4).timeout
+			if tok == _guest_roulette_tok:
+				hud.hide_roulette()
+		"capture":
+			_shake(0.22, 9.0)
+			hud.screen_flash(Color.from_string(String(d.get("color", "")), Color.WHITE), 0.2)
 
 
 # ---------------------------------------------------------------- 对局管理
@@ -1390,6 +1922,71 @@ func _run_duel_selftest() -> void:
 	get_tree().quit()
 
 
+func _run_rules_selftest() -> void:
+	_start_match(0, 1, "frost", board_cells, char_styles)
+	var p: Dictionary = pieces[0]
+	var notes: Array = []
+	# 总开关：关闭后点数与停稳修正全部失效
+	rules_enabled = false
+	theme_id = "cozy"
+	notes.append(["off-roll", _theme_roll_total(5) == 5 and _theme_roll_total(1) == 1])
+	theme_id = "frost"
+	p["cell"] = 8
+	await _theme_settle(p)
+	notes.append(["off-settle", int(p["cell"]) == 8])
+	theme_id = "dusk"
+	p["cell"] = -1
+	p["lane"] = -1
+	await _advance(p, 0)
+	notes.append(["off-dusk", int(p["cell"]) == 0])
+	rules_enabled = true
+	theme_id = "cozy"
+	notes.append(["cozy", _theme_roll_total(5) == 6])
+	theme_id = "dune"
+	notes.append(["dune", _theme_roll_total(5) == 4])
+	theme_id = "frost"
+	p["lane"] = -1
+	p["cell"] = 8
+	await _theme_settle(p)
+	notes.append(["frost", int(p["cell"]) == 9])
+	theme_id = "clock"
+	p["cell"] = 8
+	await _theme_settle(p)
+	var c1 := int(p["cell"])
+	p["cell"] = 9
+	await _theme_settle(p)
+	notes.append(["clock", c1 == 9 and int(p["cell"]) == 9])
+	theme_id = "ember"
+	p["cell"] = 9
+	await _theme_land(p)
+	notes.append(["ember", int(p["cell"]) == 8])
+	theme_id = "void"
+	p["cell"] = 8
+	await _theme_settle(p)
+	notes.append(["void", int(p["cell"]) == 8 or int(p["cell"]) == 9])
+	theme_id = "jade"
+	notes.append(["jade", _theme_roll_total(1) == 3 and _theme_roll_total(5) == 5])
+	theme_id = "dusk"
+	p["cell"] = -1
+	p["lane"] = -1
+	await _advance(p, 0)
+	notes.append(["dusk", int(p["cell"]) == 1])
+	# 沙海：掷 6 经 -1 修正后是 5，仍必须能从基地出发
+	current_team = 0
+	theme_id = "dune"
+	p["cell"] = -1
+	p["lane"] = -1
+	var dune_total: int = _theme_roll_total(6)
+	notes.append(["dune-exit", dune_total == 5 and _legal_moves(dune_total, true).size() >= 1])
+	notes.append(["dune-lock", _legal_moves(dune_total, false).is_empty()])
+	var ok := true
+	for n in notes:
+		if not bool(n[1]):
+			ok = false
+	print("SELFTEST_RULES ", "OK" if ok else "FAIL", " ", notes)
+	get_tree().quit()
+
+
 func _start_match(mode: int, level: int, selected_theme: String, cells := 40, styles: Array = []) -> void:
 	Engine.time_scale = BASE_TIME_SCALE
 	game_mode = mode
@@ -1411,6 +2008,10 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 		_rebuild_pieces()
 	arena.set_theme(theme_id)
 	_fit_camera()
+	if rules_enabled:
+		_log("场景规则 · %s" % String(THEME_RULE_TEXT.get(theme_id, "")))
+	else:
+		_log("场景规则已关闭：%s 使用纯掷骰走格" % String(THEME_LABELS.get(theme_id, "本场景")))
 	human_teams = [0] if mode == 0 else [0, 1, 2, 3]
 	active_teams = [0, 1, 2, 3]
 	match_started = true
@@ -1497,12 +2098,15 @@ func _goal_pos(team: int, slot: int) -> Vector3:
 
 
 func _is_ai(team: int) -> bool:
+	# 局域网房主：断线座位即使仍保留在 human_teams 里，也立刻交给 AI
+	if net_role == "host" and team != 0:
+		return lan == null or not lan.is_human_seat(team)
 	return not (team in human_teams)
 
 
 func _team_is_human(team: int) -> bool:
 	if net_role == "host":
-		return team == 0
+		return team == 0 or (lan != null and lan.is_human_seat(team))
 	if net_role == "guest":
 		return team == net_guest_team
 	return team in human_teams
@@ -1519,7 +2123,7 @@ func _duel_attack(p: Dictionary, q: Dictionary) -> bool:
 	_duel_team = atk_team
 	_duel_target_team = def_team
 	_duel_target_idx = int(q["idx"])
-	if net_role == "host" and atk_team == net_guest_team:
+	if net_role == "host" and atk_team != 0 and lan != null and lan.is_human_seat(atk_team):
 		# 房主权威：客机出拳通过 intent 回传，5 秒未回则随机
 		_duel_active = true
 		_duel_pick = -1
@@ -1594,14 +2198,15 @@ func _team_progress(team: int) -> int:
 
 # ---------------------------------------------------------------- 规则
 
-func _legal_moves(total: int) -> Array:
+func _legal_moves(total: int, leave_base_ok := false) -> Array:
 	var out: Array = []
 	for i in pieces.size():
 		var p: Dictionary = pieces[i]
 		if p["team"] != current_team or p["finished"] or int(p.get("lane", -1)) >= 0:
 			continue
 		if p["cell"] < 0:
-			if total == 6:
+			# 出基地看原始骰面 6 或修正后 6：沙海 -1 不会把 6 点锁死在基地
+			if leave_base_ok or total == 6:
 				out.append(i)
 		elif p["cell"] + total <= FIELDS - 1:
 			out.append(i)
@@ -1669,6 +2274,8 @@ func _resolve_capture(p: Dictionary, from_cell := -1) -> bool:
 		var home: Vector3 = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
 		# 慢动作踩爆：整段过程把时间放慢，读得清跳跃、滞空与压扁（音效由 capture_stomp 内部按阶段播放）
 		Engine.time_scale = 0.65
+		# 命中前把镜头推到攻守之间，让角色动作占住画面（结束后统一回位）
+		_cine_aim(p["node"].position, pos)
 		# 命中帧才写游戏状态：闪白、震屏、战报、残魂全部在砸中那一瞬发生
 		var on_hit := func() -> void:
 			q["cell"] = -1
@@ -1681,6 +2288,7 @@ func _resolve_capture(p: Dictionary, from_cell := -1) -> bool:
 			_shake(0.30, 18.0)
 			arena.piece_soul(pos, home, TEAM_COLORS[q["team"]])
 			_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
+			_net_fx("capture", {"color": TEAM_COLORS[p["team"]].to_html(false)})
 		await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]], on_hit)
 		Engine.time_scale = BASE_TIME_SCALE
 		q["node"].position = home
@@ -1691,6 +2299,8 @@ func _resolve_capture(p: Dictionary, from_cell := -1) -> bool:
 		if cards[p["team"]].size() < 4:
 			_draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))
 	if hit_any:
+		# 特写结束，镜头回到平时的俯视取景
+		_cine_restore()
 		_play(click_player)
 	return hit_any
 
@@ -1699,6 +2309,10 @@ func _advance(p: Dictionary, steps: int) -> bool:
 	var from_cell := -1
 	if p["cell"] < 0:
 		p["cell"] = 0
+		# 场景规则：云梯 —— 出基地直接踩到第 2 格
+		if rules_enabled and theme_id == "dusk" and FIELDS > 1:
+			p["cell"] = 1
+			_log("场景规则 · 云梯：%s 直接落在第 2 格" % TEAM_NAMES[p["team"]])
 		await _hop_to(p, _piece_cell_pos(p))
 		arena.pulse(_piece_cell_pos(p), TEAM_COLORS[p["team"]])
 	else:
@@ -1708,11 +2322,69 @@ func _advance(p: Dictionary, steps: int) -> bool:
 			from_cell = p["cell"]
 			p["cell"] += 1
 			await _hop_to(p, _piece_cell_pos(p))
+	await _theme_settle(p)
 	var captured: bool = await _resolve_capture(p, from_cell)
+	await _theme_land(p)
 	arena.pulse(_piece_cell_pos(p), TEAM_COLORS[p["team"]])
 	if p["cell"] == FIELDS - 1:
 		await _finish_piece(p)
 	return captured
+
+
+## 场景规则 · 掷骰点数修正（牧野 +1 / 沙海 -1）
+func _theme_roll_total(total: int) -> int:
+	if not rules_enabled:
+		return total
+	if theme_id == "cozy":
+		_log("场景规则 · 牧野微风：点数 +1")
+		return total + 1
+	if theme_id == "dune" and total > 1:
+		_log("场景规则 · 流沙陷足：点数 -1")
+		return total - 1
+	if theme_id == "jade" and total < 3:
+		_log("场景规则 · 丛林捷径：点数至少 3")
+		return 3
+	return total
+
+
+## 场景规则 · 停稳后的额外移动（冰面滑行 / 虚空裂隙 / 齿轮咬合）
+func _theme_settle(p: Dictionary) -> void:
+	if not rules_enabled:
+		return
+	if int(p.get("lane", -1)) >= 0 or int(p["cell"]) >= FIELDS - 1:
+		return
+	var reason := ""
+	match theme_id:
+		"frost":
+			reason = "冰面滑行"
+		"void":
+			if randf() < 0.2:
+				reason = "虚空裂隙"
+		"clock":
+			if int(p["cell"]) > 0 and int(p["cell"]) % 4 == 0:
+				reason = "齿轮咬合"
+	if reason == "":
+		return
+	p["cell"] = mini(int(p["cell"]) + 1, FIELDS - 1)
+	await _hop_to(p, _piece_cell_pos(p))
+	_log("场景规则 · %s：%s %d 号被带到第 %d 格" % [
+		reason, TEAM_NAMES[p["team"]], int(p["idx"]) + 1, int(p["cell"]) + 1])
+
+
+## 场景规则 · 吃子结算之后（熔岩灼退）
+func _theme_land(p: Dictionary) -> void:
+	if not rules_enabled:
+		return
+	if int(p.get("lane", -1)) >= 0 or int(p["cell"]) >= FIELDS - 1:
+		return
+	if theme_id != "ember":
+		return
+	if int(p["cell"]) > 0 and int(p["cell"]) % 3 == 0:
+		p["cell"] = int(p["cell"]) - 1
+		await _hop_to(p, _piece_cell_pos(p))
+		arena.piece_hit(p["node"])
+		_log("场景规则 · 灼热地面：%s %d 号被烫退 1 格" % [
+			TEAM_NAMES[p["team"]], int(p["idx"]) + 1])
 
 
 func _finish_piece(p: Dictionary) -> void:
@@ -1761,6 +2433,7 @@ func _check_win(team: int) -> bool:
 
 
 func _hop_to(p: Dictionary, target: Vector3) -> void:
+	_net_piece_sync(p)
 	var node: Node3D = p["node"]
 	var d := target - node.position
 	d.y = 0.0
@@ -1813,8 +2486,11 @@ func _do_roll() -> void:
 	if double_team == current_team:
 		total *= 2
 		double_team = -1
+	# 场景规则：牧野顺风 +1 / 沙海陷足 -1（对双方一致）
+	total = _theme_roll_total(total)
 	pending_total = total
 	hud.set_dice(raw, total)
+	_net_fx("dice", {"raw": raw, "total": total, "team": current_team})
 	_play(dice_player)
 	# 功能拓展：连续两次掷出 6 点触发「双六连击」，额外抽一张道具卡
 	if raw == 6:
@@ -1829,7 +2505,7 @@ func _do_roll() -> void:
 			var lp: Dictionary = pieces[lead_i]
 			drop_pos = Vector3(lp["node"].position.x, BOARD_Y, lp["node"].position.z)
 		if _draw_card(current_team, true, drop_pos):
-			hud.show_item_toast("双六连击", "%s 连续两次掷出 6 点，额外获得一张道具卡" % TEAM_NAMES[current_team],
+			_toast("双六连击", "%s 连续两次掷出 6 点，额外获得一张道具卡" % TEAM_NAMES[current_team],
 				Color("ffe066"))
 			hud.screen_flash(Color("ffe066"), 0.3)
 			_log("%s 连续两次掷出 6 点，额外抽到「%s」" % [TEAM_NAMES[current_team],
@@ -1838,7 +2514,7 @@ func _do_roll() -> void:
 		"（强化后 %d）" % total if total != raw else ""])
 	await arena.roll_dice(raw)
 
-	var legal := _legal_moves(total)
+	var legal := _legal_moves(total, raw == 6)
 	if legal.is_empty():
 		_play(nope_player)
 		_log("没有可以移动的棋子")
@@ -1864,6 +2540,8 @@ func _do_roll() -> void:
 	awaiting_pick = true
 	_show_move_pick(legal, total)
 	_update_all()
+	# 客机的选择面板要立刻出现，不能等 120ms 的合并推送
+	_net_push_now()
 
 
 func _show_move_pick(legal: Array, total: int) -> void:
@@ -1919,6 +2597,7 @@ func _on_piece_pressed(idx: int) -> void:
 
 func _move_piece(idx: int, steps: int) -> void:
 	var p: Dictionary = pieces[idx]
+	_net_fx("move", {"i": idx, "team": int(p["team"])})
 	var captured: bool = await _advance(p, steps)
 	if not p["finished"]:
 		await _on_land(p, 0)
@@ -1974,7 +2653,7 @@ func _on_land(p: Dictionary, depth: int) -> void:
 		p["shield"] = true
 		arena.add_shield(p["node"])
 		arena.item_cast(p["node"], Color("8fe6ff"), "shield")
-		hud.show_item_toast("安全区", "踏入安全区，获得一层护盾", Color("8fe6ff"))
+		_toast("安全区", "踏入安全区，获得一层护盾", Color("8fe6ff"))
 		_log("%s 的 %d 号棋子进入安全区，获得护盾" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
 
 
@@ -2038,7 +2717,7 @@ func _portal_jump(p: Dictionary) -> void:
 	await pop.finished
 	# 4. 落点补一次原地小跳，保持与原有落点 / 终点判定兼容
 	await _hop_to(p, _piece_cell_pos(p))
-	hud.show_item_toast("传 送 门", "%s 的 %d 号棋子被传送到第 %d 格" % [
+	_toast("传 送 门", "%s 的 %d 号棋子被传送到第 %d 格" % [
 		TEAM_NAMES[p["team"]], p["idx"] + 1, to + 1], purple)
 	hud.screen_flash(purple, 0.22)
 	_log("%s 的 %d 号棋子踏入传送门，前进 4 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1])
@@ -2070,7 +2749,7 @@ func _thorn_punish(p: Dictionary) -> void:
 		await _hop_to(p, _piece_cell_pos(p))
 		await get_tree().create_timer(0.06).timeout
 	# 5. 提示与其余反馈
-	hud.show_item_toast("荆 棘 地", "被荆棘缠住，后退 %d 格" % back, Color("ff5566"))
+	_toast("荆 棘 地", "被荆棘缠住，后退 %d 格" % back, Color("ff5566"))
 	hud.screen_flash(Color("ff5566"), 0.20)
 	_play(sfx_event)
 	_log("%s 的 %d 号棋子踩中荆棘，后退 %d 格" % [TEAM_NAMES[p["team"]], p["idx"] + 1, back])
@@ -2166,6 +2845,7 @@ func _finish_turn(extra: bool) -> void:
 		_auto_save()
 	hud.set_dice(0)
 	_update_all()
+	_net_push_now()
 	_maybe_ai_turn()
 
 
@@ -2175,7 +2855,7 @@ func _skip_frozen() -> void:
 		frozen[current_team] -= 1
 		guard += 1
 		_log("%s 被冰冻，跳过本回合" % TEAM_NAMES[current_team])
-		hud.show_event("冰 冻", "%s 本回合被冻结，无法行动" % TEAM_NAMES[current_team], Color("7fe6ff"))
+		_event_banner("冰 冻", "%s 本回合被冻结，无法行动" % TEAM_NAMES[current_team], Color("7fe6ff"))
 		current_team = _next_team(current_team)
 
 
@@ -2196,7 +2876,7 @@ func _draw_card(team: int, quiet := false, at := Vector3(INF, INF, INF)) -> bool
 		hud.screen_flash(col, 0.12)
 	if not quiet:
 		_log("%s 获得道具「%s」" % [TEAM_NAMES[team], ITEM_NAMES[id]])
-		hud.show_item_toast("获得「%s」" % ITEM_NAMES[id], ITEM_DESC.get(id, ""), col)
+		_toast("获得「%s」" % ITEM_NAMES[id], ITEM_DESC.get(id, ""), col)
 	_play(click_player)
 	_update_all()
 	return true
@@ -2715,11 +3395,11 @@ func _use_instant_card(slot: int, id: String) -> void:
 					victim_t = t
 			if victim_t < 0 or most <= 0:
 				_play(nope_player)
-				hud.show_item_toast("窃取失败", "对手手中没有道具卡", Color("ffb84a"))
+				_toast("窃取失败", "对手手中没有道具卡", Color("ffb84a"))
 				return
 			if cards[current_team].size() >= 4:
 				_play(nope_player)
-				hud.show_item_toast("窃取失败", "你的卡槽已满", Color("ffb84a"))
+				_toast("窃取失败", "你的卡槽已满", Color("ffb84a"))
 				return
 			cards[current_team].remove_at(slot)
 			var pick: int = randi() % cards[victim_t].size()
@@ -2763,7 +3443,7 @@ func _use_instant_card(slot: int, id: String) -> void:
 					cands.append(i)
 			if cands.is_empty():
 				_play(nope_player)
-				hud.show_item_toast("虚空牵引失败", "没有可放逐的对手棋子", Color("c8b8ff"))
+				_toast("虚空牵引失败", "没有可放逐的对手棋子", Color("c8b8ff"))
 				return
 			cards[current_team].remove_at(slot)
 			var victim2: Dictionary = pieces[cands[randi() % cands.size()]]
@@ -3029,7 +3709,7 @@ func _apply_card(idx: int) -> void:
 			arena.item_cast(p["node"], Color("ffd166"), "swap")
 			arena.event_ring(mine["node"].position, Color("ffd166"))
 			arena.event_ring(p["node"].position, Color("ffd166"))
-			hud.show_item_toast("使用「换位」", note, Color("ffd166"))
+			_toast("使用「换位」", note, Color("ffd166"))
 			hud.screen_flash(Color("ffd166"), 0.24)
 			_shake(0.2, 10.0)
 			_log("%s 使用了换位：%s" % [TEAM_NAMES[current_team], note])
@@ -3444,7 +4124,7 @@ func _trigger_event(p: Dictionary, forced := "", dramatic := false) -> void:
 			_shake(0.5, 26.0)
 			desc = "虚空裂隙撕开棋盘，%d 枚棋子被空间乱流抛动" % swallowed
 
-	hud.show_event(title, desc, color)
+	_event_banner(title, desc, color)
 	_log("【%s】%s" % [title.replace(" ", ""), desc])
 	_play(click_player)
 	await get_tree().create_timer(0.9).timeout
@@ -3534,6 +4214,7 @@ func _run_roulette(kind: String, p: Dictionary) -> void:
 	roulette_open = true
 	_roulette_segments = _build_roulette_segments(kind)
 	hud.show_roulette(_roulette_segments, kind)
+	_net_fx("roulette", {"kind": kind, "segs": _net_roulette_segments()})
 	_play(click_player)
 	if _is_ai(p["team"]) or auto_mode:
 		await get_tree().create_timer(0.6).timeout
@@ -3543,10 +4224,12 @@ func _run_roulette(kind: String, p: Dictionary) -> void:
 	if idx < 0 or idx >= _roulette_segments.size():
 		_roulette_segments = []
 		hud.hide_roulette()
+		_net_fx("roulette_hide", {})
 		return
 	var seg: Dictionary = _roulette_segments[idx]
 	_roulette_segments = []
 	var id := String(seg.get("id", ""))
+	_net_fx("roulette_result", {"idx": idx, "label": String(seg.get("label", "?"))})
 	_log("【轮盘】%s 转出「%s」" % [TEAM_NAMES[p["team"]], String(seg.get("label", "?"))])
 	if kind == "item":
 		_grant_item(p, id)
@@ -3556,7 +4239,18 @@ func _run_roulette(kind: String, p: Dictionary) -> void:
 		await get_tree().create_timer(0.55).timeout
 		hud.hide_roulette()
 		await _trigger_event(p, id, true)
+	_net_fx("roulette_hide", {})
 	await get_tree().create_timer(0.2).timeout
+
+
+func _net_roulette_segments() -> Array:
+	var out: Array = []
+	for s in _roulette_segments:
+		if not (s is Dictionary):
+			continue
+		var col: Color = s.get("color", Color.WHITE) if s.get("color") is Color else Color.WHITE
+		out.append({"label": String(s.get("label", "?")), "color": col.to_html(false)})
+	return out
 
 
 ## 轮盘抽中的道具直接进卡槽（满 4 张时替换最旧的一张）
@@ -3577,7 +4271,7 @@ func _grant_item(p: Dictionary, id: String) -> void:
 	hud.screen_flash(col, 0.26)
 	_play(sfx_drop)
 	var extra := "（卡槽已满，替换最旧的一张）" if replaced else ""
-	hud.show_item_toast("轮盘奖励 ·「%s」" % String(ITEM_NAMES[id]),
+	_toast("轮盘奖励 ·「%s」" % String(ITEM_NAMES[id]),
 		String(ITEM_DESC.get(id, "")) + extra, col)
 	_log("%s 获得道具「%s」%s" % [TEAM_NAMES[team], String(ITEM_NAMES[id]), extra])
 	_update_all()
@@ -4087,7 +4781,7 @@ func _update_all() -> void:
 			txt = "请选择要移动的棋子"
 		elif card_mode != "":
 			txt = "选择道具目标"
-		elif net_role == "host" and current_team == net_guest_team:
+		elif net_role == "host" and current_team != 0 and _team_is_human(current_team):
 			txt = "等待对手行动…"
 		elif net_role == "guest" and current_team != net_guest_team:
 			txt = "%s 行动中…" % TEAM_NAMES[current_team]

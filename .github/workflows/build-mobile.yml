@@ -6,8 +6,8 @@ on:
     tags: ["v*"]
 
 env:
-  VERSION_NAME: "1.0.1"
-  VERSION_CODE: "2"
+  VERSION_NAME: "1.0.2"
+  VERSION_CODE: "3"
   GODOT_VERSION: "4.3-stable"
   GODOT_TEMPLATE_DIR: "4.3.stable"
 
@@ -41,7 +41,7 @@ jobs:
           test -x "$SDKMANAGER" || { echo "未找到 sdkmanager"; ls -R "$ANDROID_SDK_ROOT" | head -40; exit 1; }
           echo "sdkmanager=$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "platform-tools" "build-tools;34.0.0" "platforms;android-34" > /dev/null
+          "$SDKMANAGER" --install "platform-tools" "build-tools;34.0.0" "platforms;android-34" "ndk;23.2.8568313" > /dev/null
           ls "$ANDROID_SDK_ROOT/build-tools"
 
       - name: 下载 Godot 与导出模板
@@ -92,8 +92,27 @@ jobs:
           and_ver = re.search(r'version/name="([^"]+)"', s).group(1)
           and_code = re.search(r'version/code=(\d+)', s).group(1)
           assert (ios_ver, ios_build) == (and_ver, and_code), (ios_ver, ios_build, and_ver, and_code)
-          print("iOS/Android 版本一致:", ios_ver, ios_build)
+          pg = open("project.godot", encoding="utf-8-sig").read()
+          proj_ver = re.search(r'config/version="([^"]+)"', pg).group(1)
+          import os
+          env_ver = os.environ["VERSION_NAME"]
+          assert proj_ver == and_ver == env_ver, (proj_ver, and_ver, env_ver)
+          print("project.godot / presets / workflow 版本一致:", proj_ver, and_ver, env_ver)
           PY
+
+      - name: 安装 Android 构建模板（Gradle 构建必需）
+        run: |
+          set -euo pipefail
+          TEMPLATE_ZIP="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}/android_source.zip"
+          rm -rf android/build
+          mkdir -p android/build
+          unzip -q "$TEMPLATE_ZIP" -d android/build
+          touch android/build/.gdignore
+          printf '%s\n' "${GODOT_TEMPLATE_DIR}" > android/.build_version
+          test -f android/build/build.gradle || { echo "构建模板不完整"; ls -R android/build | head -40; exit 1; }
+          test -f android/build/libs/release/godot-lib.template_release.aar || { echo "缺少 godot-lib"; ls -lh android/build/libs/release/ || true; exit 1; }
+          ls -lh android/build/libs/release/
+          echo "--- 构建模板版本 ---"; cat android/.build_version
 
       - name: 导入资源并导出 APK
         run: |
@@ -109,8 +128,15 @@ jobs:
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | head -1)
           "$APKSIGNER" verify --print-certs build/KnightChess.apk
-          AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt2 | head -1)
-          "$AAPT" dump badging build/KnightChess.apk | head -5
+          AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt | head -1)
+          "$AAPT" dump badging build/KnightChess.apk | head -3
+          "$AAPT" dump badging build/KnightChess.apk | grep -q "versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'" \
+            || { echo "APK 版本号与 workflow 不一致"; exit 1; }
+          "$AAPT" dump badging build/KnightChess.apk | grep -q "REQUEST_INSTALL_PACKAGES" \
+            || { echo "缺少 REQUEST_INSTALL_PACKAGES"; exit 1; }
+          "$AAPT" dump xmltree build/KnightChess.apk AndroidManifest.xml | grep -q "org.godotengine.plugin.v2.KnightUpdate" \
+            || { echo "KnightUpdate 插件未注册"; exit 1; }
+          echo "APK 版本与插件校验通过"
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
@@ -152,7 +178,12 @@ jobs:
           and_ver = re.search(r'version/name="([^"]+)"', s).group(1)
           and_code = re.search(r'version/code=(\d+)', s).group(1)
           assert (ios_ver, ios_build) == (and_ver, and_code), (ios_ver, ios_build, and_ver, and_code)
-          print("iOS/Android 版本一致:", ios_ver, ios_build)
+          pg = open("project.godot", encoding="utf-8-sig").read()
+          proj_ver = re.search(r'config/version="([^"]+)"', pg).group(1)
+          import os
+          env_ver = os.environ["VERSION_NAME"]
+          assert proj_ver == and_ver == env_ver, (proj_ver, and_ver, env_ver)
+          print("project.godot / presets / workflow 版本一致:", proj_ver, and_ver, env_ver)
           PY
 
       - name: 导入资源
@@ -229,28 +260,19 @@ jobs:
           test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
           TAG="v${VERSION_NAME}"
           cat > notes.md <<'EOF'
-          ## 骑士飞行棋3 v1.0.1
+          ## 骑士飞行棋3 v1.0.2
 
           ### 本次改动
-          - 新增「沙海神庙」「齿轮高塔」两套场景，主题扩到 8 套；每套是独立地形与光照，不是换色棋盘：
-            1. 晴日牧野：草地、土路、栅栏、散石与池塘
-            2. 暮色浮岛：粉云天穹、断拱、残塔、火盆与浮岩
-            3. 霜封冰湖：冰裂纹湖面、冰峰群、极光帘与雪堆
-            4. 熔火裂谷：熔岩面、玄武岩柱与边缘喷火口
-            5. 翠玉雨林：青绿水面、台地、石柱廊、巨树与近岸蕨叶
-            6. 虚空星海：符文环、环绕碎岩与虚空裂隙
-            7. 沙海神庙：锥形沙脊、半埋方尖碑、断柱与残墙
-            8. 齿轮高塔：黄铜地板、转动巨齿轮、钟面与琥珀壁灯
-          - 场景层整体重建：地形 / 远景 / 道具 / 专属光源随主题整组切换，棋盘与场景在地面、雾、光向上融合
-          - 吃棋演出：命中帧新增白闪、场景专属碎屑与残魂回基地；闪白、震屏、战报、计数改到砸中那一瞬写入，不再先改数据后补火光
-          - 道具命中处按场景飞起本地碎屑（落叶 / 雪屑 / 火星 / 沙尘 / 铜屑），同一件道具在 8 个场景手感不同
-          - 存档格式与局域网协议未改动，旧存档、旧包仍可读
+          - 新增设置页「更新检查」开关（持久化）：进入设置时自动检查一次，发现新版本弹小对话框，不做全屏强制更新
+          - 更新包从飞机盘分享目录读取：安卓读「安卓」、iOS 读「ios」，按「骑士飞行棋-版本号」取最大且大于当前版本的安装包
+          - 安卓下载更新后调起系统安装器；iOS 用浏览器下载，文件落在「文件 → 下载」
+          - 网络异常、目录为空或接口异常时给出可读提示，并提供「用浏览器打开分享页」兜底
 
           ### 安装包
           - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
           - `KnightChess.apk` — debug 签名，可直接安装
 
-          版本 1.0.1（build 2）
+          版本 1.0.2（build 3）
           EOF
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$IPA" --clobber

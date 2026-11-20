@@ -2,5 +2,14 @@
 .godot/
 # 构建产物
 build/
+# Android Gradle 构建缓存
+android/build/.gradle/
+android/build/app/build/
+android/build/build/
+android/build/libs/*/*.aar
+tools/knight-update-plugin/.gradle/
+tools/knight-update-plugin/**/build/
+tools/knight-update-plugin/**/libs/*.aar
+tools/knight-update-plugin/local.properties
 # Python 缓存
 __pycache__/

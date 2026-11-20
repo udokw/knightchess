@@ -1,0 +1,4 @@
+[config]
+name="KnightUpdate"
+binary_type="local"
+binary="KnightUpdate.aar"
