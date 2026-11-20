@@ -190,16 +190,65 @@ func resolve_link(file: Dictionary) -> Dictionary:
 		_encrypt(file_id + "|" + ts),
 		SHARE_ID,
 	]
-	var res := await _request(API_HOST + "/ws/file/redirect?" + query, HTTPClient.METHOD_GET, "", 0)
-	if int(res["result"]) != HTTPRequest.RESULT_SUCCESS:
-		return {"ok": false, "url": "", "error": "网络异常（%d），可改用浏览器打开分享页。" % int(res["result"])}
-	var headers: PackedStringArray = res["headers"]
-	for h in headers:
+	var res := await _redirect_location(API_HOST + "/ws/file/redirect?" + query)
+	if not bool(res["ok"]):
+		return {"ok": false, "url": "", "error": String(res["error"]) + "\n可改用浏览器打开分享页。"}
+	var code := int(res["code"])
+	if code not in [301, 302, 303, 307, 308] or String(res["location"]) == "":
+		return {"ok": false, "url": "", "error": "没有拿到下载跳转地址（HTTP %d，接口可能已变化）。" % code}
+	return {"ok": true, "url": String(res["location"]), "error": ""}
+
+
+## 读取直链接口的 302 跳转地址。
+## 不能用 HTTPRequest：max_redirects=0 会被引擎判成 RESULT_TOO_MANY_REDIRECTS(12)，
+## 而跟随跳转又会把整个安装包读进内存，所以用 HTTPClient 只看响应头。
+func _redirect_location(url: String) -> Dictionary:
+	var rest := url.trim_prefix("https://")
+	var host := rest.split("/")[0]
+	var path := rest.substr(host.length())
+	var http := HTTPClient.new()
+	var err := http.connect_to_host(host, 443, TLSOptions.client())
+	if err != OK:
+		return {"ok": false, "code": 0, "location": "", "error": "无法连接更新服务器。"}
+	var deadline := Time.get_ticks_msec() + 12000
+	while Time.get_ticks_msec() < deadline:
+		http.poll()
+		var st := http.get_status()
+		if st == HTTPClient.STATUS_CONNECTED:
+			break
+		if st in [HTTPClient.STATUS_CANT_CONNECT, HTTPClient.STATUS_CANT_RESOLVE,
+				HTTPClient.STATUS_CONNECTION_ERROR, HTTPClient.STATUS_TLS_HANDSHAKE_ERROR]:
+			http.close()
+			return {"ok": false, "code": 0, "location": "", "error": "连接更新服务器失败，请检查网络。"}
+		await get_tree().process_frame
+	if http.get_status() != HTTPClient.STATUS_CONNECTED:
+		http.close()
+		return {"ok": false, "code": 0, "location": "", "error": "连接更新服务器超时。"}
+	if http.request(HTTPClient.METHOD_GET, path, _headers()) != OK:
+		http.close()
+		return {"ok": false, "code": 0, "location": "", "error": "请求更新服务器失败。"}
+	while Time.get_ticks_msec() < deadline:
+		http.poll()
+		if http.has_response():
+			break
+		var st2 := http.get_status()
+		if st2 in [HTTPClient.STATUS_CANT_CONNECT, HTTPClient.STATUS_CANT_RESOLVE,
+				HTTPClient.STATUS_CONNECTION_ERROR, HTTPClient.STATUS_TLS_HANDSHAKE_ERROR]:
+			http.close()
+			return {"ok": false, "code": 0, "location": "", "error": "获取下载地址失败，请稍后重试。"}
+		await get_tree().process_frame
+	if not http.has_response():
+		http.close()
+		return {"ok": false, "code": 0, "location": "", "error": "获取下载地址超时。"}
+	var code := http.get_response_code()
+	var location := ""
+	for h in http.get_response_headers():
 		if String(h).to_lower().begins_with("location:"):
-			var url := String(h).substr(9).strip_edges()
-			if url != "":
-				return {"ok": true, "url": url, "error": ""}
-	return {"ok": false, "url": "", "error": "没有拿到下载跳转地址（接口可能已变化）。"}
+			location = String(h).substr(9).strip_edges()
+			break
+	http.close()
+	print("UPDATE_LINK http=%d location=%s" % [code, location.substr(0, 80)])
+	return {"ok": true, "code": code, "location": location, "error": ""}
 
 
 func open_share_page() -> void:

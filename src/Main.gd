@@ -215,6 +215,8 @@ var net_role := ""          # "" 单机 / "host" 房主 / "guest" 客机
 var net_guest_team := 1     # 局域网客机使用的队伍
 var _restoring := false
 var _debug_page := ""       # 截图调试：--page=start|load|settings|lan
+var _debug_settings_tab := -1
+var _debug_start_tab := -1
 var _selftest_save := false
 var _selftest_swap := false
 var _selftest_save_slots := false
@@ -234,11 +236,14 @@ var update_feed: Node = null
 ## 更新检查：开关持久化；进入设置时若开启则检查一次（60 秒内不重复）
 var update_enabled := true
 var _update_busy := false
+var _manual_check := false
 var _update_last_ms := 0
 var _update_latest := ""
 var _update_file: Dictionary = {}
 var _update_demo := ""
 var _selftest_update := false
+var _selftest_pounce := false
+var _selftest_stack := false
 var _plugin_wired := false
 var _net_dirty := false
 var _net_push_ms := 0
@@ -312,8 +317,16 @@ func _ready() -> void:
 			_selftest_rules = true
 		elif a == "--selftest-update":
 			_selftest_update = true
+		elif a == "--selftest-pounce":
+			_selftest_pounce = true
+		elif a == "--selftest-stack":
+			_selftest_stack = true
 		elif a.begins_with("--update-demo="):
 			_update_demo = a.substr(14)
+		elif a.begins_with("--settings-tab="):
+			_debug_settings_tab = int(a.substr(15))
+		elif a.begins_with("--start-tab="):
+			_debug_start_tab = int(a.substr(12))
 		elif a.begins_with("--load="):
 			_debug_load = int(a.substr(7))
 		elif a == "--lan-host":
@@ -362,13 +375,17 @@ func _ready() -> void:
 		match _debug_page:
 			"start":
 				hud.show_start()
+				if _debug_start_tab >= 0:
+					hud.select_start_tab(_debug_start_tab)
 			"load":
 				hud.show_load(_save_records())
 			"settings":
 				hud.show_settings()
+				if _debug_settings_tab >= 0:
+					hud.select_settings_tab(_debug_settings_tab)
 				if _update_demo != "":
 					hud.show_update_found(_update_demo)
-				else:
+				elif _debug_settings_tab < 0:
 					_maybe_check_update()
 			"help":
 				hud.show_help()
@@ -397,6 +414,14 @@ func _ready() -> void:
 
 	if _selftest_update:
 		_run_update_selftest()
+		return
+
+	if _selftest_pounce:
+		_run_pounce_selftest()
+		return
+
+	if _selftest_stack:
+		_run_stack_selftest()
 		return
 
 	if _cli_lan_host:
@@ -432,6 +457,30 @@ func _ready() -> void:
 			# 截图调试：触发一次场景切换重铸演出，拍中段
 			_theme_swap(theme_id)
 			await get_tree().create_timer(0.30).timeout
+		if all_args.has("--fxdemo-pounce"):
+			# 截图调试：把攻守摆成「隔 4 格」并走一步，连拍跳杀全过程
+			var ba: Dictionary = pieces[0]
+			var bd: Dictionary = pieces[4]
+			for i in range(2, FIELDS - 4):
+				if _is_safe_cell(i) or _is_safe_cell(i + 4):
+					continue
+				var pt: Vector3 = _pt_pos(_path_point(0, i + 4))
+				var found := -1
+				for j in range(4, FIELDS):
+					if not _is_safe_cell(j) and _pt_pos(_path_point(1, j)) == pt:
+						found = j
+						break
+				if found >= 0:
+					ba["cell"] = i
+					bd["cell"] = found
+					break
+			ba["node"].position = _piece_cell_pos(ba)
+			bd["node"].position = _piece_cell_pos(bd)
+			ba["node"].rotation.y = atan2(bd["node"].position.x - ba["node"].position.x,
+				bd["node"].position.z - ba["node"].position.z)
+			_advance(ba, 4)
+			await _fx_frame_burst(shot_path, 10, 0.20)
+			return
 		if all_args.has("--fxdemo-capture"):
 			# 截图调试：把两枚棋子摆到一起，连拍吃棋动画
 			var na: Node3D = pieces[0]["node"]
@@ -440,7 +489,14 @@ func _ready() -> void:
 			na.position = base
 			nb.position = base + Vector3(26, 0, 8)
 			_cine_aim(na.position, nb.position)
-			arena.capture_stomp(na, nb, TEAM_COLORS[0])
+			var kst := 0
+			var kvr := 0
+			for ka in all_args:
+				if String(ka).begins_with("--kill-style="):
+					kst = int(String(ka).substr(13))
+				elif String(ka).begins_with("--kill-variant="):
+					kvr = int(String(ka).substr(15))
+			arena.capture_stomp(na, nb, TEAM_COLORS[0], Callable(), kst, kvr)
 			await _fx_frame_burst(shot_path, 8, 0.22)
 			return
 		var fxid := ""
@@ -645,8 +701,12 @@ func _cine_aim(a_pos: Vector3, b_pos: Vector3, dur := 0.30) -> void:
 	if _cam_home.is_empty():
 		_cam_home = {"target": cam_target, "yaw": cam_yaw, "pitch": cam_pitch, "dist": cam_dist}
 	var mid := (a_pos + b_pos) * 0.5
-	_cine_to(mid + Vector3(0, 76.0, 0), cam_yaw, deg_to_rad(22.0),
-		clampf(cam_dist * 0.30, 700.0, 980.0), dur)
+	# 跳杀可能横跨小半张棋盘：镜头按攻守间距拉远一点，保证起跳点和落点都在画面里
+	var span := Vector2(a_pos.x - b_pos.x, a_pos.z - b_pos.z).length()
+	# 跨度越大，机位越高越远，免得镜头钻进中央高台、也保证起跳点与落点同框
+	_cine_to(mid + Vector3(0, 76.0 + span * 0.08, 0), cam_yaw,
+		deg_to_rad(clampf(22.0 + span / 60.0, 22.0, 46.0)),
+		clampf(cam_dist * 0.30 + span * 0.55, 700.0, 1900.0), dur)
 
 
 ## 特写结束，回到特写前的取景
@@ -666,6 +726,7 @@ func _theme_swap(id: String) -> void:
 	theme_id = id
 	arena.set_theme(id)
 	_fit_camera()
+	_refresh_rule_hint()
 	_apply_theme_audio()
 	hud.screen_flash(accent.lightened(0.55), 0.16)
 	_shake(0.16, 5.0)
@@ -680,6 +741,13 @@ func _theme_swap(id: String) -> void:
 	_cine_to(cam_target, cam_yaw, cam_pitch, base, 0.62)
 	await get_tree().create_timer(0.86).timeout
 	_theme_swapping = false
+
+
+## 左上角规则提示：跟随当前场景与规则开关（联机客机由房主下发的 theme/rules 驱动）
+func _refresh_rule_hint() -> void:
+	if hud == null:
+		return
+	hud.set_rule_hint(String(THEME_RULE_TEXT.get(theme_id, "")) if rules_enabled else "")
 
 
 func _setup_audio() -> void:
@@ -806,13 +874,14 @@ func _setup_hud() -> void:
 	hud.duel_toggled.connect(_on_duel_toggled)
 	hud.rules_toggled.connect(func(on: bool):
 		rules_enabled = on
+		_refresh_rule_hint()
 		_save_prefs())
 	hud.update_toggled.connect(func(on: bool):
 		update_enabled = on
 		_save_prefs()
 		if on:
 			_maybe_check_update())
-	hud.update_check_pressed.connect(_check_update)
+	hud.update_check_pressed.connect(func(): _check_update(true))
 	hud.update_download_pressed.connect(_on_update_download)
 	hud.update_browser_pressed.connect(func():
 		if update_feed != null:
@@ -936,9 +1005,10 @@ func _maybe_check_update() -> void:
 	_check_update()
 
 
-func _check_update() -> void:
-	if not update_enabled or _update_busy or update_feed == null:
+func _check_update(manual := false) -> void:
+	if (not manual and not update_enabled) or _update_busy or update_feed == null:
 		return
+	_manual_check = manual
 	_update_busy = true
 	if hud != null:
 		hud.set_update_status("正在检查更新…", Color(1, 1, 1, 0.55))
@@ -948,6 +1018,8 @@ func _check_update() -> void:
 func _on_update_checked(result: Dictionary) -> void:
 	_update_busy = false
 	_update_last_ms = _now_ms()
+	var manual := _manual_check
+	_manual_check = false
 	var latest := String(result.get("latest", ""))
 	var err := String(result.get("error", ""))
 	if not bool(result.get("ok", false)):
@@ -976,6 +1048,8 @@ func _on_update_checked(result: Dictionary) -> void:
 			hud.show_update_note(err + "\n\n也可以用浏览器打开分享页手动下载。", true)
 		else:
 			hud.set_update_status("已是最新版本 v%s" % UpdateFeedScript.current_version())
+			if manual:
+				hud.show_update_note("已是最新版本 v%s。" % UpdateFeedScript.current_version())
 
 
 func _on_update_download() -> void:
@@ -1026,7 +1100,8 @@ func _on_plugin_update_state(stage: String, message: String) -> void:
 			hud.set_update_status(message, Color("7cf0a8"))
 			hud.show_update_note(message, false)
 		"permission":
-			hud.show_update_note(message, false)
+			hud.set_update_status("等待「安装未知应用」授权", Color("ffb84a"))
+			hud.show_update_permission(message)
 		_:
 			hud.show_update_error(message)
 
@@ -1600,6 +1675,7 @@ func _apply_net(st: Dictionary) -> void:
 			clampi(int(g.get("cells", 40)), 40, 64), g.get("styles", char_styles))
 		human_teams = [net_guest_team]
 		net_role = "guest"
+	_refresh_rule_hint()
 	var at: Variant = g.get("active_teams", [])
 	if at is Array and not at.is_empty():
 		active_teams = []
@@ -1738,6 +1814,8 @@ func _on_lan_fx(kind: String, d: Dictionary) -> void:
 			else:
 				to = _pt_pos("HM%d_%d" % [int(p["team"]) + 1, int(p["idx"]) + 1])
 			var node: Node3D = p["node"]
+			# 客机侧也补一记脚步，和房主的逐格起落对得上
+			arena.fx_sound("step", -4.0)
 			var tw := create_tween()
 			tw.set_trans(Tween.TRANS_SINE)
 			tw.tween_property(node, "position", to, 0.18)
@@ -1769,6 +1847,12 @@ func _on_lan_fx(kind: String, d: Dictionary) -> void:
 		"capture":
 			_shake(0.22, 9.0)
 			hud.screen_flash(Color.from_string(String(d.get("color", "")), Color.WHITE), 0.2)
+		"block":
+			# 客机只补一次破盾表现，房主那边已经播过；不会再触发第二次吃子
+			var bi := int(d.get("i", -1))
+			if bi >= 0 and bi < pieces.size():
+				arena.pulse(pieces[bi]["node"].position, Color.from_string(String(d.get("color", "")), Color("8fe6ff")))
+			arena.fx_sound("cap_block", -2.0)
 
 
 # ---------------------------------------------------------------- 对局管理
@@ -1810,24 +1894,26 @@ func _run_save_selftest() -> void:
 	get_tree().quit()
 
 
-## 换位自测：只跑占位试算，不依赖真实对局与节点（headless 可跑）
+## 换位自测：占位试算 + 实际占用格断言（需要真实 paths，故先开局）
 func _run_swap_selftest() -> void:
+	_start_match(0, 1, "cozy", board_cells, char_styles)
 	var all_ok := true
-	# 1. 普通格 ↔ 普通格
+	# 1. 环道 ↔ 环道：索引按各自路径换算，落点是对方的实际占用格
 	var a1 := {"team": 0, "idx": 0, "cell": 5, "lane": -1, "lslot": 0}
 	var b1 := {"team": 1, "idx": 0, "cell": 22, "lane": -1, "lslot": 0}
 	var r1 := _swap_plan(a1, b1)
 	var ok1: bool = String(r1["mode"]) == "full" \
-		and int(r1["a"]["cell"]) == 22 and int(r1["a"]["lane"]) == -1 \
-		and int(r1["b"]["cell"]) == 5 and int(r1["b"]["lane"]) == -1
+		and int(r1["a"]["lane"]) == -1 and int(r1["b"]["lane"]) == -1 \
+		and _same_tile(0, int(r1["a"]["cell"]), 1, 22) \
+		and _same_tile(1, int(r1["b"]["cell"]), 0, 5)
 	all_ok = _report_swap_case("plain", ok1) and all_ok
-	# 2. 对方在自己通道：只能把对方拽出
+	# 2. 对方在自己通道：只能把对方拽出到我这格（实际占用格）
 	var a2 := {"team": 0, "idx": 0, "cell": 12, "lane": -1, "lslot": 0}
 	var b2 := {"team": 1, "idx": 0, "cell": 39, "lane": 1, "lslot": 2}
 	var r2 := _swap_plan(a2, b2)
 	var ok2: bool = String(r2["mode"]) == "pull" \
 		and int(r2["a"]["cell"]) == 12 and int(r2["a"]["lane"]) == -1 \
-		and int(r2["b"]["cell"]) == 12 and int(r2["b"]["lane"]) == -1
+		and int(r2["b"]["lane"]) == -1 and _same_tile(1, int(r2["b"]["cell"]), 0, 12)
 	all_ok = _report_swap_case("enemy_lane", ok2) and all_ok
 	# 3. 对方在我方通道：双方都能落到合法占位，真换
 	var a3 := {"team": 0, "idx": 0, "cell": 12, "lane": -1, "lslot": 0}
@@ -1835,20 +1921,55 @@ func _run_swap_selftest() -> void:
 	var r3 := _swap_plan(a3, b3)
 	var ok3: bool = String(r3["mode"]) == "full" \
 		and int(r3["a"]["cell"]) == 30 and int(r3["a"]["lane"]) == 0 and int(r3["a"]["lslot"]) == 3 \
-		and int(r3["b"]["cell"]) == 12 and int(r3["b"]["lane"]) == -1
+		and int(r3["b"]["lane"]) == -1 and _same_tile(1, int(r3["b"]["cell"]), 0, 12)
 	all_ok = _report_swap_case("my_lane", ok3) and all_ok
-	# 4. 我方在对方通道：真换，我方回环道、对方回自己的通道
+	# 4. 我方在对方通道：真换，我方回环道（实际占用格）、对方回自己的通道
 	var a4 := {"team": 0, "idx": 0, "cell": 30, "lane": 1, "lslot": 1}
 	var b4 := {"team": 1, "idx": 0, "cell": 12, "lane": -1, "lslot": 0}
 	var r4 := _swap_plan(a4, b4)
 	var ok4: bool = String(r4["mode"]) == "full" \
-		and int(r4["a"]["cell"]) == 12 and int(r4["a"]["lane"]) == -1 \
+		and int(r4["a"]["lane"]) == -1 and _same_tile(0, int(r4["a"]["cell"]), 1, 12) \
 		and int(r4["b"]["cell"]) == 30 and int(r4["b"]["lane"]) == 1 and int(r4["b"]["lslot"]) == 1
 	all_ok = _report_swap_case("other_lane", ok4) and all_ok
+	# 5. 用户实测场景：红队出基地后的 1 号位，黄队在我方终点通道前 6-7 格
+	#    期望：两枚落在对方的实际占用格，而不是「各走一段」
+	var red_ring := 32  # 我方终点通道（39）前 7 格的物理环位
+	var yellow_cell := _swap_target_cell(0, red_ring, 3)
+	var a5 := {"team": 0, "idx": 0, "cell": 1, "lane": -1, "lslot": 0}
+	var b5 := {"team": 3, "idx": 0, "cell": yellow_cell, "lane": -1, "lslot": 0}
+	var r5 := _swap_plan(a5, b5)
+	var ok5: bool = String(r5["mode"]) == "full" and yellow_cell >= 0 \
+		and _same_tile(0, int(r5["a"]["cell"]), 3, yellow_cell) \
+		and _same_tile(3, int(r5["b"]["cell"]), 0, 1)
+	all_ok = _report_swap_case("user_case", ok5) and all_ok
+	# 6. 降级：对方待在自己的终点通道里（不可进入）→ 只把对方拽出，我方不动，
+	#    不能出现「双方各走一段」
+	var a6 := {"team": 0, "idx": 0, "cell": 20, "lane": -1, "lslot": 0}
+	var b6 := {"team": 3, "idx": 0, "cell": 39, "lane": 3, "lslot": 2}
+	var r6 := _swap_plan(a6, b6)
+	var ok6: bool = String(r6["mode"]) == "pull" \
+		and int(r6["a"]["cell"]) == 20 and int(r6["a"]["lane"]) == -1 \
+		and int(r6["b"]["lane"]) == -1 and _same_tile(3, int(r6["b"]["cell"]), 0, 20)
+	all_ok = _report_swap_case("enemy_in_own_lane", ok6) and all_ok
+	# 7. 双方各在自己的通道：谁也进不去 → 不移动，战报说明失败
+	var a7 := {"team": 0, "idx": 0, "cell": 39, "lane": 0, "lslot": 0}
+	var b7 := {"team": 1, "idx": 0, "cell": 39, "lane": 1, "lslot": 0}
+	var r7 := _swap_plan(a7, b7)
+	var ok7: bool = String(r7["mode"]) == "none"
+	all_ok = _report_swap_case("both_in_lanes", ok7) and all_ok
 	if not all_ok:
 		push_error("SWAP_SELFTEST FAIL")
-	print("SWAP_SELFTEST DONE")
+	print("SWAP_SELFTEST ", "OK" if all_ok else "FAIL")
 	get_tree().quit()
+
+
+## 两个(队伍,索引)是否指向同一块实际格子
+func _same_tile(t1: int, c1: int, t2: int, c2: int) -> bool:
+	if t1 < 0 or t2 < 0 or t1 >= paths.size() or t2 >= paths.size():
+		return false
+	if c1 < 0 or c2 < 0 or c1 >= paths[t1].size() or c2 >= paths[t2].size():
+		return false
+	return String(paths[t1][c1]) == String(paths[t2][c2])
 
 
 func _report_swap_case(case_name: String, ok: bool) -> bool:
@@ -1919,6 +2040,170 @@ func _run_duel_selftest() -> void:
 	var ok: bool = ok_pos and ok_lose and ok_win
 	print("SELFTEST_DUEL ", "OK" if ok else "FAIL", " pos=", ok_pos,
 		" lose=", ok_lose, " win=", ok_win)
+	get_tree().quit()
+
+
+## 自测辅助：逐帧采样，记录节点是否经过给定的世界坐标（阈值 12 单位）
+func _watch_points(node: Node3D, pts: Array, seen: Dictionary) -> void:
+	for _i in 400:
+		await get_tree().process_frame
+		if not is_instance_valid(node):
+			return
+		for k in pts.size():
+			if node.position.distance_to(pts[k]) < 12.0:
+				seen[k] = true
+
+
+## 跳杀自测：落点压着敌子时不逐格走，直接从起跳点跃过去完成吃子
+func _run_pounce_selftest() -> void:
+	_start_match(0, 1, "cozy", board_cells, char_styles)
+	var atk: Dictionary = pieces[0]
+	var def: Dictionary = pieces[4]
+	var a_cell := -1
+	var d_cell := -1
+	for i in range(2, FIELDS - 4):
+		if _is_safe_cell(i) or _is_safe_cell(i + 4):
+			continue
+		var pt: Vector3 = _pt_pos(_path_point(0, i + 4))
+		for j in range(4, FIELDS):
+			if _is_safe_cell(j):
+				continue
+			if _pt_pos(_path_point(1, j)) == pt:
+				a_cell = i
+				d_cell = j
+				break
+		if a_cell >= 0:
+			break
+	var ok_setup: bool = a_cell >= 0 and d_cell >= 0
+	var ok_has := false
+	var ok_walk := false
+	var ok_cell := false
+	var ok_captured := false
+	var ok_skip := false
+	if ok_setup:
+		atk["cell"] = a_cell
+		def["cell"] = d_cell
+		atk["node"].position = _piece_cell_pos(atk)
+		def["node"].position = _piece_cell_pos(def)
+		ok_has = _has_enemy_at(atk, a_cell + 4)
+		# 落点没有敌子时仍走普通逐格
+		def["cell"] = -1
+		ok_walk = not _has_enemy_at(atk, a_cell + 4)
+		def["cell"] = d_cell
+		# 监看中间三格：跳杀不应经过它们
+		var mids: Array = []
+		for k in range(1, 4):
+			mids.append(_pt_pos(_path_point(0, a_cell + k)))
+		var touched := {}
+		_watch_points(atk["node"], mids, touched)
+		await _advance(atk, 4)
+		ok_cell = int(atk["cell"]) == a_cell + 4
+		ok_captured = int(def["cell"]) == -1 and captures[0] == 1
+		ok_skip = touched.is_empty()
+	# 冰面滑行场景：跳杀的那一格不再触发停稳位移，否则会被滑开、永远吃不到
+	var ok_frost := false
+	if ok_captured:
+		theme_id = "frost"
+		atk["cell"] = a_cell
+		def["cell"] = d_cell
+		atk["node"].position = _piece_cell_pos(atk)
+		def["node"].position = _piece_cell_pos(def)
+		await _advance(atk, 4)
+		ok_frost = int(def["cell"]) == -1 and int(atk["cell"]) == a_cell + 4
+	var ok: bool = ok_setup and ok_has and ok_walk and ok_cell and ok_captured and ok_skip and ok_frost
+	print("SELFTEST_POUNCE ", "OK" if ok else "FAIL", " setup=", ok_setup, " has=", ok_has,
+		" walk=", ok_walk, " cell=", ok_cell, " cap=", ok_captured, " skip=", ok_skip,
+		" frost=", ok_frost)
+	get_tree().quit()
+
+
+## 同格自测：同一物理格叠着两枚敌子（其中一枚带护盾）被踩中
+## 期望：只结算一次 —— 带盾的那枚只破盾留在原地，另一枚被吃，captures 只 +1
+func _run_stack_selftest() -> void:
+	_start_match(0, 1, "cozy", board_cells, char_styles)
+	var atk: Dictionary = pieces[0]
+	var d1: Dictionary = pieces[4]
+	var d2: Dictionary = pieces[8]
+	var c := -1
+	var d1c := -1
+	var d2c := -1
+	var pt := Vector3.ZERO
+	for i in range(2, FIELDS - 1):
+		if _is_safe_cell(i):
+			continue
+		var pnt: Vector3 = _pt_pos(_path_point(0, i))
+		var j1 := -1
+		var j2 := -1
+		for j in range(1, FIELDS):
+			if _pt_pos(_path_point(1, j)) == pnt:
+				j1 = j
+			if _pt_pos(_path_point(2, j)) == pnt:
+				j2 = j
+		if j1 >= 0 and j2 >= 0:
+			c = i
+			d1c = j1
+			d2c = j2
+			pt = pnt
+			break
+	var ok_setup: bool = c > 0 and d1c >= 0 and d2c >= 0
+	var before: int = captures[0]
+	var ok_atk := false
+	var ok_shield := false
+	var ok_one_dead := false
+	var ok_count := false
+	if ok_setup:
+		atk["cell"] = c - 1
+		atk["lane"] = -1
+		atk["finished"] = false
+		atk["node"].position = _piece_cell_pos(atk)
+		d1["cell"] = d1c
+		d1["lane"] = -1
+		d1["shield"] = true
+		d1["node"].position = pt
+		d2["cell"] = d2c
+		d2["lane"] = -1
+		d2["shield"] = false
+		d2["node"].position = pt
+		await _advance(atk, 1)
+		ok_atk = int(atk["cell"]) == c and int(atk.get("lane", -1)) < 0
+		# 带盾方：盾被破，但人不死、仍占着这一格
+		ok_shield = not bool(d1["shield"]) and int(d1["cell"]) == d1c
+		# 同格另一枚：正常被吃，且只死这一枚
+		ok_one_dead = int(d2["cell"]) < 0 and int(d1["cell"]) >= 0
+		ok_count = captures[0] == before + 1
+	# 追加：同格两枚都不带盾时，一次踩落也只能吃掉一枚（只结算一次）
+	var ok_single := false
+	var ok_single_count := false
+	if ok_setup:
+		var again: int = captures[0]
+		atk["cell"] = c - 1
+		atk["lane"] = -1
+		atk["node"].position = _piece_cell_pos(atk)
+		d1["cell"] = d1c
+		d1["lane"] = -1
+		d1["shield"] = false
+		d1["node"].position = pt
+		d1["node"].visible = true
+		d2["cell"] = d2c
+		d2["lane"] = -1
+		d2["shield"] = false
+		d2["node"].position = pt
+		d2["node"].visible = true
+		await _advance(atk, 1)
+		var dead := 0
+		if int(d1["cell"]) < 0:
+			dead += 1
+		if int(d2["cell"]) < 0:
+			dead += 1
+		ok_single = dead == 1
+		ok_single_count = captures[0] == again + 1
+	var ok: bool = (ok_setup and ok_atk and ok_shield and ok_one_dead and ok_count
+		and ok_single and ok_single_count)
+	print("SELFTEST_STACK ", "OK" if ok else "FAIL", " setup=", ok_setup,
+		" atk=", ok_atk, " shield=", ok_shield, " one=", ok_one_dead,
+		" count=", ok_count, " single=", ok_single, " count2=", ok_single_count,
+		" caps=", captures[0] - before,
+		" d1=", int(d1["cell"]), " d2=", int(d2["cell"]))
 	get_tree().quit()
 
 
@@ -2008,6 +2293,7 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 		_rebuild_pieces()
 	arena.set_theme(theme_id)
 	_fit_camera()
+	_refresh_rule_hint()
 	if rules_enabled:
 		_log("场景规则 · %s" % String(THEME_RULE_TEXT.get(theme_id, "")))
 	else:
@@ -2242,88 +2528,138 @@ func _is_item_cell(cell: int) -> bool:
 	return quarter % 2 == 0 and cell % step == step * 2 / 10
 
 
+## 落点是否压着敌方棋子（只做判断，不改状态；用于决定「跳杀」还是逐格走）
+func _has_enemy_at(p: Dictionary, cell: int) -> bool:
+	if cell < 0 or _is_safe_cell(cell):
+		return false
+	var point := _path_point(int(p["team"]), cell)
+	for q in pieces:
+		if q["team"] == p["team"] or q["finished"] or int(q.get("lane", -1)) >= 0 or int(q["cell"]) < 0:
+			continue
+		if _path_point(int(q["team"]), int(q["cell"])) == point:
+			return true
+	return false
+
+
 func _resolve_capture(p: Dictionary, from_cell := -1) -> bool:
 	if _is_safe_cell(p["cell"]):
 		return false
 	var point := _path_point(p["team"], p["cell"])
-	var hit_any := false
+	# 一次踩落只结算一次：同格的护盾各破一层，但最多只吃一枚未带盾的敌子。
+	# 先快照当格的敌子，避免结算过程中 cell/护盾变化影响后续判断。
+	var blocked: Array = []
+	var target: Dictionary = {}
 	for q in pieces:
 		if q["team"] == p["team"] or q["finished"] or int(q.get("lane", -1)) >= 0 or q["cell"] < 0:
 			continue
 		if _path_point(q["team"], q["cell"]) != point:
 			continue
-		hit_any = true
-		# 吃棋对决：攻击方出拳、守方随机；输或平则发起吃棋的一方退回吃棋前的格子
-		if duel_enabled and not await _duel_attack(p, q):
-			if from_cell >= 0:
-				p["cell"] = from_cell
-				arena.piece_recoil(p["node"], p["node"].position - q["node"].position, 1.4)
-				await _hop_to(p, _piece_cell_pos(p))
-			_log("对决失利：%s 的 %d 号棋子退回第 %d 格" % [
-				TEAM_NAMES[p["team"]], p["idx"] + 1, int(p["cell"]) + 1])
-			_play(click_player)
-			return false
 		if q["shield"]:
-			q["shield"] = false
-			arena.remove_shield(q["node"])
-			_log("%s 的护盾挡下了攻击" % TEAM_NAMES[q["team"]])
-			arena.pulse(q["node"].position, Color("8fe6ff"))
-			arena.fx_sound("cap_block")
-			continue
-		var pos: Vector3 = q["node"].position
-		var home: Vector3 = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
-		# 慢动作踩爆：整段过程把时间放慢，读得清跳跃、滞空与压扁（音效由 capture_stomp 内部按阶段播放）
-		Engine.time_scale = 0.65
-		# 命中前把镜头推到攻守之间，让角色动作占住画面（结束后统一回位）
-		_cine_aim(p["node"].position, pos)
-		# 命中帧才写游戏状态：闪白、震屏、战报、残魂全部在砸中那一瞬发生
-		var on_hit := func() -> void:
-			q["cell"] = -1
-			q["lane"] = -1
-			q["lslot"] = 0
-			q["finished"] = false
-			captures[p["team"]] += 1
-			hud.screen_flash(Color(1, 1, 1), 0.18)
-			hud.screen_flash(TEAM_COLORS[p["team"]], 0.26)
-			_shake(0.30, 18.0)
-			arena.piece_soul(pos, home, TEAM_COLORS[q["team"]])
-			_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
-			_net_fx("capture", {"color": TEAM_COLORS[p["team"]].to_html(false)})
-		await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]], on_hit)
-		Engine.time_scale = BASE_TIME_SCALE
-		q["node"].position = home
-		q["node"].scale = Vector3.ONE
-		q["node"].rotation = Vector3.ZERO
-		q["node"].visible = true
-		# 吃子奖励：抽一张道具卡
-		if cards[p["team"]].size() < 4:
-			_draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))
-	if hit_any:
-		# 特写结束，镜头回到平时的俯视取景
-		_cine_restore()
+			blocked.append(q)
+		elif target.is_empty():
+			target = q
+	if blocked.is_empty() and target.is_empty():
+		return false
+	# 吃棋对决：只针对真正要吃掉的那枚发起；输或平则攻击方退回吃棋前的格子
+	if not target.is_empty() and duel_enabled and not await _duel_attack(p, target):
+		if from_cell >= 0:
+			p["cell"] = from_cell
+			arena.piece_recoil(p["node"], p["node"].position - target["node"].position, 1.4)
+			await _hop_to(p, _piece_cell_pos(p))
+		_log("对决失利：%s 的 %d 号棋子退回第 %d 格" % [
+			TEAM_NAMES[p["team"]], p["idx"] + 1, int(p["cell"]) + 1])
 		_play(click_player)
-	return hit_any
+		return false
+	# 同格带盾的：只破盾，不死（每枚只破一层），并同步给客机播一次
+	for q in blocked:
+		q["shield"] = false
+		arena.remove_shield(q["node"])
+		_log("%s 的护盾挡下了攻击" % TEAM_NAMES[q["team"]])
+		arena.pulse(q["node"].position, Color("8fe6ff"))
+		arena.fx_sound("cap_block")
+		_net_fx("block", {"i": int(q["team"]) * PIECES_PER_TEAM + int(q["idx"]),
+			"color": Color("8fe6ff").to_html(false)})
+	if target.is_empty():
+		# 只破了盾，没有吃到子：不算一次吃棋（不给额外回合）
+		return false
+	var q: Dictionary = target
+	var pos: Vector3 = q["node"].position
+	var home: Vector3 = _pt_pos("HM%d_%d" % [q["team"] + 1, q["idx"] + 1])
+	# 慢动作踩爆：整段过程把时间放慢，读得清跳跃、滞空与压扁（音效由 capture_stomp 内部按阶段播放）
+	Engine.time_scale = 0.65
+	# 命中前把镜头推到攻守之间，让角色动作占住画面（结束后统一回位）
+	_cine_aim(p["node"].position, pos)
+	# 命中帧才写游戏状态：闪白、震屏、战报、残魂全部在砸中那一瞬发生
+	var on_hit := func() -> void:
+		q["cell"] = -1
+		q["lane"] = -1
+		q["lslot"] = 0
+		q["finished"] = false
+		captures[p["team"]] += 1
+		hud.screen_flash(Color(1, 1, 1), 0.18)
+		hud.screen_flash(TEAM_COLORS[p["team"]], 0.26)
+		_shake(0.30, 18.0)
+		arena.piece_soul(pos, home, TEAM_COLORS[q["team"]])
+		_log("%s 吃掉了 %s 的 %d 号棋子" % [TEAM_NAMES[p["team"]], TEAM_NAMES[q["team"]], q["idx"] + 1])
+		_net_fx("capture", {"color": TEAM_COLORS[p["team"]].to_html(false)})
+	# 每个职业三套击杀动作轮换：0 跃斩 / 1 横扫 / 2 压顶
+	var kv: int = int(p.get("kills", 0))
+	p["kills"] = kv + 1
+	var kstyle: int = int(char_styles[int(p["team"])]) if int(p["team"]) < char_styles.size() else 0
+	await arena.capture_stomp(p["node"], q["node"], TEAM_COLORS[p["team"]], on_hit, kstyle, kv)
+	Engine.time_scale = BASE_TIME_SCALE
+	q["node"].position = home
+	q["node"].scale = Vector3.ONE
+	q["node"].rotation = Vector3.ZERO
+	q["node"].visible = true
+	# 吃子奖励：抽一张道具卡
+	if cards[p["team"]].size() < 4:
+		_draw_card(p["team"], false, Vector3(pos.x, BOARD_Y, pos.z))
+	# 特写结束，镜头回到平时的俯视取景
+	_cine_restore()
+	_play(click_player)
+	return true
 
 
 func _advance(p: Dictionary, steps: int) -> bool:
 	var from_cell := -1
+	var pounce := false
 	if p["cell"] < 0:
 		p["cell"] = 0
 		# 场景规则：云梯 —— 出基地直接踩到第 2 格
 		if rules_enabled and theme_id == "dusk" and FIELDS > 1:
 			p["cell"] = 1
 			_log("场景规则 · 云梯：%s 直接落在第 2 格" % TEAM_NAMES[p["team"]])
-		await _hop_to(p, _piece_cell_pos(p))
+		await _hop_to(p, _piece_cell_pos(p), true)
 		arena.pulse(_piece_cell_pos(p), TEAM_COLORS[p["team"]])
 	else:
-		for _i in steps:
-			if p["cell"] >= FIELDS - 1:
-				break
-			from_cell = p["cell"]
-			p["cell"] += 1
-			await _hop_to(p, _piece_cell_pos(p))
-	await _theme_settle(p)
+		from_cell = p["cell"]
+		var dest: int = mini(int(p["cell"]) + steps, FIELDS - 1)
+		# 跳杀：这一步会落在敌子上时，不再逐格走过去，直接从起跳点跃过去，
+		# 让「位移」和「击杀」合成同一段动作（落点坐标照常写入，吃棋判定不变）
+		if _has_enemy_at(p, dest):
+			pounce = true
+			p["cell"] = dest
+			_net_piece_sync(p)
+			_log("跳杀：%s 的 %d 号棋子直接跃向第 %d 格" % [
+				TEAM_NAMES[p["team"]], int(p["idx"]) + 1, dest + 1])
+		else:
+			for _i in steps:
+				if p["cell"] >= FIELDS - 1:
+					break
+				from_cell = p["cell"]
+				p["cell"] += 1
+				await _hop_to(p, _piece_cell_pos(p), _i == steps - 1 or int(p["cell"]) >= FIELDS - 1)
+	# 跳杀时落点被敌子占着，不再触发「冰面滑行 / 齿轮咬合 / 虚空裂隙」这类停稳位移，
+	# 否则会把棋子从敌子格上滑开，跳杀永远打不出来
+	if not pounce:
+		await _theme_settle(p)
 	var captured: bool = await _resolve_capture(p, from_cell)
+	# 跳杀被护盾挡下之类没有真正压上去的情况：把棋子补到它逻辑上的格子
+	if pounce and not captured and int(p.get("lane", -1)) < 0 and int(p["cell"]) >= 0:
+		var want: Vector3 = _piece_cell_pos(p)
+		if p["node"].position.distance_to(want) > 2.0:
+			await _hop_to(p, want)
 	await _theme_land(p)
 	arena.pulse(_piece_cell_pos(p), TEAM_COLORS[p["team"]])
 	if p["cell"] == FIELDS - 1:
@@ -2432,13 +2768,16 @@ func _check_win(team: int) -> bool:
 	return true
 
 
-func _hop_to(p: Dictionary, target: Vector3) -> void:
+## 走一格：起跳一记脚步，最后一格换成更沉的一步（与逐格起落对拍）
+func _hop_to(p: Dictionary, target: Vector3, heavy := false) -> void:
 	_net_piece_sync(p)
 	var node: Node3D = p["node"]
 	var d := target - node.position
 	d.y = 0.0
 	if d.length() > 1.0:
 		node.rotation.y = atan2(d.x, d.z)
+		var pitch := 1.0 + float(int(p["team"])) * 0.03 + randf_range(-0.05, 0.05)
+		arena.fx_sound("step_land" if heavy else "step", -1.0 if heavy else -4.0, pitch)
 	var t := create_tween()
 	t.set_trans(Tween.TRANS_SINE)
 	t.tween_property(node, "position", node.position + Vector3(0, 34, 0), 0.10)
@@ -3536,6 +3875,35 @@ func _show_card_pick(pool: Array, hint: String) -> void:
 		hud.show_pick(options, hint)
 
 
+## 把 source_team 的第 cell 格换算到 dest_team 路径上的索引（按棋盘上的实际占用格）
+## 各队环道是同一圈节点的不同起点，索引不能直接互换；找不到返回 -1
+func _swap_target_cell(src_team: int, src_cell: int, dst_team: int) -> int:
+	if src_team == dst_team:
+		return src_cell
+	if src_cell < 0 or paths.size() <= src_team or paths.size() <= dst_team:
+		return -1
+	var src: Array = paths[src_team]
+	var dst: Array = paths[dst_team]
+	if src_cell >= src.size():
+		return -1
+	var want := String(src[src_cell])
+	for i in dst.size():
+		if String(dst[i]) == want:
+			return i
+	return -1
+
+
+## 占位落到指定队伍：环道格换算成该队的实际占用格；通道格保持原样
+func _swap_slot_for(slot: Dictionary, from_team: int, to_team: int) -> Dictionary:
+	var out: Dictionary = slot.duplicate()
+	if int(out.get("lane", -1)) < 0:
+		var c := _swap_target_cell(from_team, int(out.get("cell", -1)), to_team)
+		if c < 0:
+			return {}
+		out["cell"] = c
+	return out
+
+
 ## 换位试算：只读字典，不碰节点。返回双方最终占位与结算方式
 ## mode: full = 真换；pull = 对方被拽出、我方不动；shift = 我方位移、对方不动；none = 谁也动不了
 func _swap_plan(a: Dictionary, b: Dictionary) -> Dictionary:
@@ -3554,15 +3922,27 @@ func _swap_plan(a: Dictionary, b: Dictionary) -> Dictionary:
 	var b_out: Dictionary = b_slot.duplicate()
 	var mode := "none"
 	if mine_can and enemy_can:
+		# 双方都落到对方的实际占用格（环道索引按各自路径换算，不是数字对调）
+		var nb := _swap_slot_for(b_slot, b_team, a_team)
+		var na := _swap_slot_for(a_slot, a_team, b_team)
+		if nb.is_empty() or na.is_empty():
+			return {"a": a_out, "b": b_out, "mode": "none"}
 		mode = "full"
-		a_out = b_slot.duplicate()
-		b_out = a_slot.duplicate()
+		a_out = nb
+		b_out = na
 	elif enemy_can:
+		# 对方被拽出到我这格：按我这格的实际占用格换算到对方路径
+		var pulled := _swap_slot_for(a_slot, a_team, b_team)
+		if pulled.is_empty():
+			return {"a": a_out, "b": b_out, "mode": "none"}
 		mode = "pull"
-		b_out = a_slot.duplicate()
+		b_out = pulled
 	elif mine_can:
+		var moved := _swap_slot_for(b_slot, b_team, a_team)
+		if moved.is_empty():
+			return {"a": a_out, "b": b_out, "mode": "none"}
 		mode = "shift"
-		a_out = b_slot.duplicate()
+		a_out = moved
 	return {"a": a_out, "b": b_out, "mode": mode}
 
 
@@ -3687,15 +4067,15 @@ func _apply_card(idx: int) -> void:
 					_swap_slot_pos(mine, plan["a"]), _swap_slot_pos(p, plan["b"]))
 				note = "与 %s 的棋子交换了位置" % TEAM_NAMES[p["team"]]
 			elif mode == "pull":
-				# 对方站在自己的通道里：只能把对方拽出到我这格，我原地不动
+				# 对方站在自己的终点通道里（不可进入）：只能把对方拽出到我这格，我原地不动
 				await _hop_to(p, _swap_slot_pos(p, plan["b"]))
-				note = "把 %s 的棋子从终点通道拽了出来" % TEAM_NAMES[p["team"]]
+				note = "%s 的棋子在不可进入的终点通道，只能把它拽出到你这格" % TEAM_NAMES[p["team"]]
 			elif mode == "shift":
-				# 我方位移过去、对方原地不动
+				# 我方在终点通道里（对方进不来）：我方位移出去、对方原地不动
 				await _hop_to(mine, _swap_slot_pos(mine, plan["a"]))
-				note = "位移到 %s 的棋子旁" % TEAM_NAMES[p["team"]]
+				note = "你在不可进入的终点通道，改为位移到 %s 棋子的实际所在格" % TEAM_NAMES[p["team"]]
 			else:
-				note = "双方都占着对方通道，换位失败"
+				note = "双方都在不可进入的终点通道里，换位失败（未移动任何棋子）"
 			# 动画落地后才写数据
 			mine["cell"] = int(plan["a"]["cell"])
 			mine["lane"] = int(plan["a"]["lane"])
@@ -3713,7 +4093,7 @@ func _apply_card(idx: int) -> void:
 			hud.screen_flash(Color("ffd166"), 0.24)
 			_shake(0.2, 10.0)
 			_log("%s 使用了换位：%s" % [TEAM_NAMES[current_team], note])
-			_play(click_player)
+			arena.fx_sound("it_swap")
 			_update_all()
 			_check_win(current_team)
 			if not game_over:
@@ -4126,7 +4506,7 @@ func _trigger_event(p: Dictionary, forced := "", dramatic := false) -> void:
 
 	_event_banner(title, desc, color)
 	_log("【%s】%s" % [title.replace(" ", ""), desc])
-	_play(click_player)
+	# 每种事件的专属音效已在 arena.event_fx 里按 id 播放，这里不再叠通用点击音
 	await get_tree().create_timer(0.9).timeout
 
 	# 事件可能把棋子送到终点
@@ -4730,11 +5110,28 @@ func _team_front_pos(team: int) -> Vector3:
 func _ai_swap(a: int, b: int) -> void:
 	var mine: Dictionary = pieces[a]
 	var other: Dictionary = pieces[b]
-	var my_cell: int = mine["cell"]
-	mine["cell"] = other["cell"]
-	other["cell"] = my_cell
-	await _hop_to(mine, _piece_cell_pos(mine))
-	await _hop_to(other, _piece_cell_pos(other))
+	var plan := _swap_plan(mine, other)
+	var mode := String(plan["mode"])
+	if mode == "none":
+		_log("%s 的换位失败：双方都在不可进入的通道里" % TEAM_NAMES[mine["team"]])
+		return
+	if mode == "full":
+		await arena.piece_swap_arc(mine["node"], other["node"], Color("ffd166"),
+			_swap_slot_pos(mine, plan["a"]), _swap_slot_pos(other, plan["b"]))
+	elif mode == "pull":
+		await _hop_to(other, _swap_slot_pos(other, plan["b"]))
+	else:
+		await _hop_to(mine, _swap_slot_pos(mine, plan["a"]))
+	mine["cell"] = int(plan["a"]["cell"])
+	mine["lane"] = int(plan["a"]["lane"])
+	mine["lslot"] = int(plan["a"]["lslot"])
+	other["cell"] = int(plan["b"]["cell"])
+	other["lane"] = int(plan["b"]["lane"])
+	other["lslot"] = int(plan["b"]["lslot"])
+	mine["finished"] = int(mine["lane"]) == int(mine["team"])
+	other["finished"] = int(other["lane"]) == int(other["team"])
+	_snap_piece(mine)
+	_snap_piece(other)
 	arena.item_cast(mine["node"], Color("ffd166"), "swap")
 	arena.item_cast(other["node"], Color("ffd166"), "swap")
 	hud.screen_flash(Color("ffd166"), 0.22)

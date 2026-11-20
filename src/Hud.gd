@@ -137,6 +137,11 @@ var _menu_panel: PanelContainer
 var _menu_button: Button
 var _menu_ring: Panel
 var _menu_open := false
+## 场景规则提示：菜单按钮右侧一行（仅对局中且开启规则时显示）
+var _rule_hint: PanelContainer
+var _rule_label: Label
+var _rule_text := ""
+var _game_visible := false
 var _sound_on := true
 var _sound_button: Button
 var _music_on := true
@@ -217,6 +222,8 @@ var _theme_id := "dusk"
 var _mode_buttons: Array = []
 var _level_buttons: Array = []
 var _start_theme_buttons: Array = []
+var _start_tab_buttons: Array = []
+var _start_tab_panels: Array = []
 var _safe := Vector4.ZERO
 var _game_nodes: Array = []
 var _home_overlay: Control
@@ -272,6 +279,9 @@ var _duel_pick_value := -1
 var _duel_tween: Tween
 ## 更新检查（小对话框，不做全屏强制）
 var _s_update_button: Button = null
+var _s_update_check_btn: Button = null
+var _s_tab_buttons: Array = []
+var _s_tab_panels: Array = []
 var _update_on := true
 var _update_version_label: Label = null
 var _update_status_label: Label = null
@@ -472,6 +482,44 @@ func _build_menu() -> void:
 	_root.add_child(_menu_button)
 	_game_nodes.append(_menu_button)
 
+	# 场景规则提示：菜单按钮右侧的细条，克制配色，贴顶不压棋盘
+	_rule_hint = PanelContainer.new()
+	var rstyle := StyleBoxFlat.new()
+	rstyle.bg_color = Color(0.03, 0.045, 0.07, 0.58)
+	rstyle.corner_radius_top_left = 12
+	rstyle.corner_radius_top_right = 12
+	rstyle.corner_radius_bottom_left = 12
+	rstyle.corner_radius_bottom_right = 12
+	rstyle.border_width_left = 1
+	rstyle.border_width_top = 1
+	rstyle.border_width_right = 1
+	rstyle.border_width_bottom = 1
+	rstyle.border_color = Color(1, 1, 1, 0.10)
+	rstyle.content_margin_left = 10
+	rstyle.content_margin_right = 12
+	rstyle.content_margin_top = 4
+	rstyle.content_margin_bottom = 4
+	_rule_hint.add_theme_stylebox_override("panel", rstyle)
+	_rule_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rule_hint.visible = false
+	var ra := HBoxContainer.new()
+	ra.add_theme_constant_override("separation", 6)
+	ra.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rule_hint.add_child(ra)
+	var rtag := _label("规则", 11, GOLD)
+	rtag.modulate.a = 0.78
+	ra.add_child(rtag)
+	_rule_label = _label("", 12, Color(0.90, 0.93, 0.98, 0.86))
+	_rule_label.clip_text = true
+	_rule_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_rule_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ra.add_child(_rule_label)
+	_root.add_child(_rule_hint)
+	_game_nodes.append(_rule_hint)
+	_layout_rule_hint()
+	if not get_viewport().size_changed.is_connected(_layout_rule_hint):
+		get_viewport().size_changed.connect(_layout_rule_hint)
+
 	_menu_panel = PanelContainer.new()
 	_menu_panel.add_theme_stylebox_override("panel", _flat(Color(0.035, 0.05, 0.085, 0.94), 18, Color(1, 1, 1, 0.12)))
 	_menu_panel.position = Vector2(24.0 + _safe.x, 86.0 + _safe.y)
@@ -540,6 +588,23 @@ func _toggle_menu() -> void:
 	_menu_open = not _menu_open
 	_menu_panel.visible = _menu_open
 	_menu_button.text = "✕" if _menu_open else "≡"
+
+
+## 菜单按钮右侧的规则提示：传空串即隐藏（规则关闭 / 未开局）
+func set_rule_hint(text: String) -> void:
+	if _rule_label == null:
+		return
+	_rule_text = text.strip_edges()
+	_rule_label.text = _rule_text
+	_rule_hint.visible = _game_visible and _rule_text != ""
+
+
+func _layout_rule_hint() -> void:
+	if _rule_hint == null:
+		return
+	var vw := get_viewport().get_visible_rect().size.x
+	_rule_hint.position = Vector2(26.0 + _safe.x + 54.0 + 10.0, 32.0 + _safe.y)
+	_rule_hint.size = Vector2(clampf(vw * 0.40, 190.0, 430.0), 32.0)
 
 
 func _toggle_sound() -> void:
@@ -1388,26 +1453,18 @@ func _build_start() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_start_overlay.add_child(dim)
 
-	var scroll := ScrollContainer.new()
-	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	scroll.offset_left = 12
-	scroll.offset_right = -12
-	scroll.offset_top = 64
-	scroll.offset_bottom = -12
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_start_overlay.add_child(scroll)
-
-	var center := CenterContainer.new()
-	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(center)
-
+	# 卡片铺满安全区：「开始对局」固定在底部，中间的分类内容单独滚动
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.055, 0.095, 0.96), 24, Color(1, 1, 1, 0.1)))
-	card.custom_minimum_size = Vector2(660, 0)
-	center.add_child(card)
+	card.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	card.offset_left = 12.0
+	card.offset_right = -12.0
+	card.offset_top = 60.0
+	card.offset_bottom = -10.0
+	_start_overlay.add_child(card)
 
 	var back := _btn("‹ 返回", Vector2(104, 40), 15)
-	back.position = Vector2(24.0 + _safe.x, 14.0 + _safe.y)
+	back.position = Vector2(24.0 + _safe.x, 12.0 + _safe.y)
 	back.pressed.connect(show_home)
 	_start_overlay.add_child(back)
 
@@ -1415,72 +1472,106 @@ func _build_start() -> void:
 	vb.add_theme_constant_override("separation", 8)
 	card.add_child(vb)
 
-	var ttl := _label("创建对局", 38, GOLD)
+	var ttl := _label("创建对局", 30, GOLD)
 	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ttl)
-	var sub := _label("骑士飞行棋 3 · 对局设置", 12, Color(1, 1, 1, 0.45))
+	var sub := _label("骑士飞行棋 3 · 对局设置", 11, Color(1, 1, 1, 0.45))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
-	vb.add_child(_spacer(8))
 
-	vb.add_child(_label("对战模式", 13, DIM))
+	# 分类标签：常用项一屏可见，开始按钮固定在底部不被挤出屏幕
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	vb.add_child(tabs)
+	_start_tab_buttons.clear()
+	_start_tab_panels.clear()
+	var tab_names := ["基 础", "场 景", "棋 子"]
+	for i in tab_names.size():
+		var tb := _btn(tab_names[i], Vector2(0, 42), 16)
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var ti := i
+		tb.pressed.connect(func(): _select_start_tab(ti))
+		tabs.add_child(tb)
+		_start_tab_buttons.append(tb)
+
+	var body_scroll := ScrollContainer.new()
+	body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(body_scroll)
+	var body_holder := VBoxContainer.new()
+	body_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_holder.add_theme_constant_override("separation", 8)
+	body_scroll.add_child(body_holder)
+	for i in tab_names.size():
+		var body := VBoxContainer.new()
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_theme_constant_override("separation", 8)
+		body.visible = i == 0
+		body_holder.add_child(body)
+		_start_tab_panels.append(body)
+
+	var basic: VBoxContainer = _start_tab_panels[0]
+	basic.add_child(_label("对战模式", 13, DIM))
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 10)
-	vb.add_child(mode_row)
+	basic.add_child(mode_row)
 	for i in 2:
 		var txt: String = ["人机 · 1v3", "4 人热座"][i]
-		var b := _btn(txt, Vector2(0, 46), 17)
+		var b := _btn(txt, Vector2(0, 48), 17)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var idx := i
 		b.pressed.connect(func(): _select_mode(idx))
 		mode_row.add_child(b)
 		_mode_buttons.append(b)
 
-	vb.add_child(_label("AI 难度", 13, DIM))
+	basic.add_child(_label("AI 难度", 13, DIM))
 	var level_row := HBoxContainer.new()
 	level_row.add_theme_constant_override("separation", 10)
-	vb.add_child(level_row)
+	basic.add_child(level_row)
 	for i in 3:
 		var txt2: String = ["简单", "普通", "困难"][i]
-		var b2 := _btn(txt2, Vector2(0, 44), 16)
+		var b2 := _btn(txt2, Vector2(0, 46), 16)
 		b2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var idx2 := i
 		b2.pressed.connect(func(): _select_level(idx2))
 		level_row.add_child(b2)
 		_level_buttons.append(b2)
 
-	vb.add_child(_label("棋盘场景（8 个独立场景 · 地形与光照各不相同）", 13, DIM))
-	var theme_row := GridContainer.new()
-	theme_row.columns = 4
-	theme_row.add_theme_constant_override("h_separation", 8)
-	theme_row.add_theme_constant_override("v_separation", 8)
-	vb.add_child(theme_row)
-	for i in THEME_IDS.size():
-		var b3 := _btn(THEME_NAMES[i], Vector2(0, 38), 12)
-		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var tid: String = THEME_IDS[i]
-		b3.pressed.connect(func(): _select_theme(tid))
-		theme_row.add_child(b3)
-		_start_theme_buttons.append(b3)
-
-	vb.add_child(_label("棋盘大小（大棋盘可用双指拖动平移）", 13, DIM))
+	basic.add_child(_label("棋盘大小（大棋盘可用双指拖动平移）", 13, DIM))
 	var size_row := HBoxContainer.new()
 	size_row.add_theme_constant_override("separation", 10)
-	vb.add_child(size_row)
+	basic.add_child(size_row)
 	for i in BOARD_SIZES.size():
-		var bs := _btn(BOARD_SIZE_NAMES[i], Vector2(0, 40), 14)
+		var bs := _btn(BOARD_SIZE_NAMES[i], Vector2(0, 46), 14)
 		bs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var bi := i
 		bs.pressed.connect(func(): _select_board_size(bi))
 		size_row.add_child(bs)
 		_board_buttons.append(bs)
 
-	vb.add_child(_label("棋子角色（先选队伍，再点角色）", 13, DIM))
+	var scene: VBoxContainer = _start_tab_panels[1]
+	scene.add_child(_label("棋盘场景（8 个独立场景 · 地形与光照各不相同）", 13, DIM))
+	var theme_row := GridContainer.new()
+	theme_row.columns = 4
+	theme_row.add_theme_constant_override("h_separation", 8)
+	theme_row.add_theme_constant_override("v_separation", 8)
+	scene.add_child(theme_row)
+	for i in THEME_IDS.size():
+		var b3 := _btn(THEME_NAMES[i], Vector2(0, 44), 12)
+		b3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var tid: String = THEME_IDS[i]
+		b3.pressed.connect(func(): _select_theme(tid))
+		theme_row.add_child(b3)
+		_start_theme_buttons.append(b3)
+
+	var chars: VBoxContainer = _start_tab_panels[2]
+	chars.add_child(_label("棋子角色（先选队伍，再点角色）", 13, DIM))
 	var team_row := HBoxContainer.new()
 	team_row.add_theme_constant_override("separation", 8)
-	vb.add_child(team_row)
+	chars.add_child(team_row)
 	for t in 4:
-		var tb := _btn(["红队", "蓝队", "绿队", "黄队"][t], Vector2(0, 34), 13)
+		var tb := _btn(["红队", "蓝队", "绿队", "黄队"][t], Vector2(0, 38), 13)
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var ti := t
 		tb.pressed.connect(func(): _select_char_team(ti))
@@ -1491,16 +1582,16 @@ func _build_start() -> void:
 	char_grid.columns = 4
 	char_grid.add_theme_constant_override("h_separation", 8)
 	char_grid.add_theme_constant_override("v_separation", 6)
-	vb.add_child(char_grid)
+	chars.add_child(char_grid)
 	for i in 8:
-		var cb := _btn(CHAR_NAMES[i], Vector2(0, 38), 14)
+		var cb := _btn(CHAR_NAMES[i], Vector2(0, 42), 14)
 		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var ci := i
 		cb.pressed.connect(func(): _select_char(ci))
 		char_grid.add_child(cb)
 		_char_buttons.append(cb)
 
-	vb.add_child(_spacer(6))
+	vb.add_child(_spacer(4))
 	var go := _btn("开 始 对 局", Vector2(0, 58), 24)
 	go.add_theme_stylebox_override("normal", _btn_style(Color("c99a4e"), Color("f0cd8a"), 14))
 	go.add_theme_stylebox_override("hover", _btn_style(Color("e0b060"), Color("ffe0a0"), 14))
@@ -1509,13 +1600,12 @@ func _build_start() -> void:
 	go.pressed.connect(_start_clicked)
 	vb.add_child(go)
 
-	var hint := _label("17 种道具 · 16 种随机事件 · 踩格触发轮盘 · 随机掉落", 12, Color(1, 1, 1, 0.45))
+	var hint := _label("17 种道具 · 16 种随机事件 · 踩格触发轮盘 · 随机掉落", 11, Color(1, 1, 1, 0.45))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(hint)
-	var hint2 := _label("单指拖动旋转 · 双指捏合缩放 / 平移 · 点击骰子投掷 · 点棋子走子", 11, Color(1, 1, 1, 0.32))
-	hint2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(hint2)
 
+	_select_start_tab(0)
 	_select_mode(0)
 	_select_level(1)
 	_select_theme("dusk")
@@ -1704,66 +1794,136 @@ func _build_settings() -> void:
 	var vb := _page_card(center, 600)
 	_page_head(vb, "设 置")
 
-	_s_sound_button = _btn("音效：开", Vector2(0, 46), 16)
+	# 分类标签：每页内容更短，小屏不用滚动
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	vb.add_child(tabs)
+	_s_tab_buttons.clear()
+	_s_tab_panels.clear()
+	var names := ["对 局", "规 则", "外 观", "更 新"]
+	var bodies: Array = []
+	for i in names.size():
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 10)
+		body.visible = i == 0
+		vb.add_child(body)
+		bodies.append(body)
+		var tb := _btn(names[i], Vector2(0, 44), 16)
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var idx := i
+		tb.pressed.connect(func(): _select_settings_tab(idx))
+		tabs.add_child(tb)
+		_s_tab_buttons.append(tb)
+		_s_tab_panels.append(body)
+
+	var play: VBoxContainer = bodies[0]
+	_s_sound_button = _btn("音效：开", Vector2(0, 48), 16)
 	_s_sound_button.pressed.connect(_toggle_sound)
-	vb.add_child(_s_sound_button)
-	_s_music_button = _btn("主题音乐：开", Vector2(0, 46), 16)
+	play.add_child(_s_sound_button)
+	_s_music_button = _btn("主题音乐：开", Vector2(0, 48), 16)
 	_s_music_button.pressed.connect(_toggle_music)
-	vb.add_child(_s_music_button)
-	_s_pick_button = _btn("走子列表：开", Vector2(0, 46), 16)
+	play.add_child(_s_music_button)
+	_s_pick_button = _btn("走子列表：开", Vector2(0, 48), 16)
 	_s_pick_button.pressed.connect(_toggle_pick_visible)
-	vb.add_child(_s_pick_button)
-	_s_items_button = _btn("道具面板：开", Vector2(0, 46), 16)
+	play.add_child(_s_pick_button)
+	_s_items_button = _btn("道具面板：开", Vector2(0, 48), 16)
 	_s_items_button.pressed.connect(_toggle_items)
-	vb.add_child(_s_items_button)
-	_s_duel_button = _btn("吃棋对决：关", Vector2(0, 46), 16)
+	play.add_child(_s_items_button)
+	var play_tip := _label("设置会立即保存，下次启动沿用。", 11, Color(1, 1, 1, 0.4))
+	play_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	play.add_child(play_tip)
+
+	var rule: VBoxContainer = bodies[1]
+	_s_duel_button = _btn("吃棋对决：关", Vector2(0, 48), 16)
 	_s_duel_button.pressed.connect(_toggle_duel)
-	vb.add_child(_s_duel_button)
+	rule.add_child(_s_duel_button)
 	_paint_duel_button()
 	var duel_tip := _label("开启后吃棋前先玩一局，输或平则退回原位", 11, Color(1, 1, 1, 0.4))
 	duel_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(duel_tip)
-
-	_s_rules_button = _btn("场景规则：开", Vector2(0, 46), 16)
+	rule.add_child(duel_tip)
+	_s_rules_button = _btn("场景规则：开", Vector2(0, 48), 16)
 	_s_rules_button.pressed.connect(_toggle_rules)
-	vb.add_child(_s_rules_button)
+	rule.add_child(_s_rules_button)
 	_paint_rules_button()
 	var rules_tip := _label("关闭后 8 套场景只保留外观，不再附加掷骰/落点修正", 11, Color(1, 1, 1, 0.4))
 	rules_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(rules_tip)
-
+	rules_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rule.add_child(rules_tip)
 	var help_btn := _btn("玩 法 说 明", Vector2(0, 46), 16)
 	help_btn.pressed.connect(show_help)
-	vb.add_child(help_btn)
+	rule.add_child(help_btn)
 
-	_s_update_button = _btn("更新检查：开", Vector2(0, 46), 16)
-	_s_update_button.pressed.connect(_toggle_update)
-	vb.add_child(_s_update_button)
-	_update_version_label = _label("当前版本 v%s" % UpdateFeedScript.current_version(), 12, DIM)
-	_update_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(_update_version_label)
-	_update_status_label = _label("", 11, Color(1, 1, 1, 0.45))
-	_update_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(_update_status_label)
-	_paint_update_button()
-
-	vb.add_child(_spacer(4))
-	vb.add_child(_label("默认棋盘主题", 13, DIM))
+	var look: VBoxContainer = bodies[2]
+	look.add_child(_label("默认棋盘主题", 13, DIM))
 	var grid := GridContainer.new()
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 8)
 	grid.add_theme_constant_override("v_separation", 6)
-	vb.add_child(grid)
+	look.add_child(grid)
 	for i in THEME_IDS.size():
-		var b := _btn(THEME_NAMES[i], Vector2(0, 40), 14)
+		var b := _btn(THEME_NAMES[i], Vector2(0, 42), 14)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var tid: String = THEME_IDS[i]
 		b.pressed.connect(func(): _pick_theme(tid))
 		grid.add_child(b)
 
-	var tip := _label("设置会立即保存，下次启动沿用。", 11, Color(1, 1, 1, 0.35))
-	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(tip)
+	var upd: VBoxContainer = bodies[3]
+	_s_update_button = _btn("更新检查：开", Vector2(0, 48), 16)
+	_s_update_button.pressed.connect(_toggle_update)
+	upd.add_child(_s_update_button)
+	_update_version_label = _label("当前版本 v%s" % UpdateFeedScript.current_version(), 13, DIM)
+	_update_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	upd.add_child(_update_version_label)
+	_s_update_check_btn = _btn("检 查 更 新", Vector2(0, 46), 16)
+	_s_update_check_btn.pressed.connect(func(): update_check_pressed.emit())
+	upd.add_child(_s_update_check_btn)
+	_update_status_label = _label("", 12, Color(1, 1, 1, 0.45))
+	_update_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_update_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	upd.add_child(_update_status_label)
+	_paint_update_button()
+	var upd_tip := _label("开启后每次进入设置会自动检查一次；也可以随时手动检查。", 11, Color(1, 1, 1, 0.4))
+	upd_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	upd_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	upd.add_child(upd_tip)
+
+	_select_settings_tab(0)
+
+
+## 设置页分类切换（外部调用，仅调试/截图用）
+func select_settings_tab(idx: int) -> void:
+	_select_settings_tab(clampi(idx, 0, maxi(_s_tab_buttons.size() - 1, 0)))
+
+
+## 设置页分类切换：仅选中页可见
+func _select_settings_tab(idx: int) -> void:
+	for i in _s_tab_buttons.size():
+		var b: Button = _s_tab_buttons[i]
+		var on := i == idx
+		b.add_theme_stylebox_override("normal",
+			_btn_style(Color(0.94, 0.8, 0.54, 0.2) if on else Color(1, 1, 1, 0.07), GOLD if on else Color(1, 1, 1, 0.1)))
+		b.add_theme_color_override("font_color", GOLD if on else TEXT)
+		b.add_theme_color_override("font_hover_color", GOLD if on else Color.WHITE)
+	for i in _s_tab_panels.size():
+		(_s_tab_panels[i] as Control).visible = i == idx
+
+
+## 开局设置分类切换（外部调用，调试/截图用）
+func select_start_tab(idx: int) -> void:
+	_select_start_tab(clampi(idx, 0, maxi(_start_tab_buttons.size() - 1, 0)))
+
+
+## 开局设置分类切换：仅选中页可见
+func _select_start_tab(idx: int) -> void:
+	for i in _start_tab_buttons.size():
+		var b: Button = _start_tab_buttons[i]
+		var on := i == idx
+		b.add_theme_stylebox_override("normal",
+			_btn_style(Color(0.94, 0.8, 0.54, 0.2) if on else Color(1, 1, 1, 0.07), GOLD if on else Color(1, 1, 1, 0.1)))
+		b.add_theme_color_override("font_color", GOLD if on else TEXT)
+		b.add_theme_color_override("font_hover_color", GOLD if on else Color.WHITE)
+	for i in _start_tab_panels.size():
+		(_start_tab_panels[i] as Control).visible = i == idx
 
 
 func _build_lan() -> void:
@@ -2011,15 +2171,19 @@ func _hide_pages() -> void:
 
 
 func _hide_game_nodes() -> void:
+	_game_visible = false
 	for n in _game_nodes:
 		if is_instance_valid(n):
 			n.visible = false
 
 
 func _show_game_nodes() -> void:
+	_game_visible = true
 	for n in _game_nodes:
 		if is_instance_valid(n):
 			n.visible = true
+	if _rule_hint != null:
+		_rule_hint.visible = _rule_text != ""
 
 
 func show_home() -> void:
@@ -2206,6 +2370,7 @@ func show_update_found(latest: String) -> void:
 		return
 	_update_title.text = "发 现 新 版 本"
 	_update_body.text = "当前 v%s，最新 v%s。\n是否现在下载更新？" % [UpdateFeedScript.current_version(), latest]
+	_update_download_btn.text = "下载更新"
 	_update_download_btn.visible = true
 	_update_download_btn.disabled = false
 	_update_retry_btn.visible = false
@@ -2232,6 +2397,20 @@ func show_update_note(msg: String, retry := false) -> void:
 	_update_download_btn.visible = false
 	_update_retry_btn.visible = retry
 	_update_browser_btn.visible = retry
+	_update_overlay.visible = true
+
+
+## 已下载完成但缺少「安装未知应用」授权：留一个可直接继续安装的按钮
+func show_update_permission(msg: String) -> void:
+	if _update_overlay == null:
+		return
+	_update_title.text = "需 要 授 权"
+	_update_body.text = msg
+	_update_download_btn.text = "继续安装"
+	_update_download_btn.visible = true
+	_update_download_btn.disabled = false
+	_update_retry_btn.visible = false
+	_update_browser_btn.visible = false
 	_update_overlay.visible = true
 
 

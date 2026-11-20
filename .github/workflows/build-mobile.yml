@@ -6,8 +6,8 @@ on:
     tags: ["v*"]
 
 env:
-  VERSION_NAME: "1.0.2"
-  VERSION_CODE: "3"
+  VERSION_NAME: "1.0.3"
+  VERSION_CODE: "4"
   GODOT_VERSION: "4.3-stable"
   GODOT_TEMPLATE_DIR: "4.3.stable"
 
@@ -16,6 +16,11 @@ jobs:
     name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -59,13 +64,16 @@ jobs:
           godot --headless --version
           ls "$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}" | head -20
 
-      - name: 生成 debug keystore
+      # 固定发布签名：私钥只以 base64 存在 GitHub Secret 里，仓库内不放明文
+      #   ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+      # 每次构建都用同一把钥匙，才能覆盖安装旧版本
+      - name: 还原固定发布 keystore
         run: |
           set -euo pipefail
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
-            -keystore "$HOME/android_debug.keystore" -storepass android \
-            -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
-          ls -l "$HOME/android_debug.keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$HOME/release.keystore"
+          test -s "$HOME/release.keystore"
+          keytool -list -keystore "$HOME/release.keystore" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" > /dev/null
+          ls -l "$HOME/release.keystore"
 
       - name: 写入 Godot 编辑器设置
         run: |
@@ -77,9 +85,9 @@ jobs:
           [resource]
           export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
           export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$HOME/android_debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
+          export/android/debug_keystore = "$HOME/release.keystore"
+          export/android/debug_keystore_user = "$ANDROID_KEY_ALIAS"
+          export/android/debug_keystore_pass = "$ANDROID_KEYSTORE_PASSWORD"
           EOF
 
       - name: 校验版本号一致
@@ -128,6 +136,10 @@ jobs:
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | head -1)
           "$APKSIGNER" verify --print-certs build/KnightChess.apk
+          # 固定发布证书的 SHA-256（公开指纹，不是口令）：签名一旦漂移立刻失败
+          "$APKSIGNER" verify --print-certs build/KnightChess.apk \
+            | grep -qi "13fbc983ce20b3dc7bfbbbc13327b39769209ebe84ad146d7c89fe582c00fbde" \
+            || { echo "APK 签名证书与发布指纹不一致"; exit 1; }
           AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt | head -1)
           "$AAPT" dump badging build/KnightChess.apk | head -3
           "$AAPT" dump badging build/KnightChess.apk | grep -q "versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'" \
@@ -260,19 +272,20 @@ jobs:
           test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
           TAG="v${VERSION_NAME}"
           cat > notes.md <<'EOF'
-          ## 骑士飞行棋3 v1.0.2
+          ## 骑士飞行棋3 v1.0.3
 
           ### 本次改动
-          - 新增设置页「更新检查」开关（持久化）：进入设置时自动检查一次，发现新版本弹小对话框，不做全屏强制更新
-          - 更新包从飞机盘分享目录读取：安卓读「安卓」、iOS 读「ios」，按「骑士飞行棋-版本号」取最大且大于当前版本的安装包
-          - 安卓下载更新后调起系统安装器；iOS 用浏览器下载，文件落在「文件 → 下载」
-          - 网络异常、目录为空或接口异常时给出可读提示，并提供「用浏览器打开分享页」兜底
+          - 对局左上角（菜单按钮右侧）新增场景规则提示；联机客机按房主下发的场景同步显示
+          - 修复同格吃棋重复结算：一次踩落只吃一枚，带护盾的那枚只破盾不死
+          - 修复换位卡：按棋盘实际占用格互换，不再因各队环道起点不同而「各走一段」；不可进入的终点通道按降级规则处理并在战报说明
+          - 安卓改用固定发布密钥签名，可覆盖安装后续版本
 
           ### 安装包
           - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
-          - `KnightChess.apk` — debug 签名，可直接安装
+          - `KnightChess.apk` — 固定发布密钥签名，可直接安装；签名 SHA-256 指纹见 Release 说明
 
-          版本 1.0.2（build 3）
+          签名证书 SHA-256：`13FB C983 CE20 B3DC 7BFB BBC1 3327 B397 6920 9EBE 84AD 146D 7C89 FE58 2C00 FBDE`
+          版本 1.0.3（build 4）
           EOF
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$IPA" --clobber

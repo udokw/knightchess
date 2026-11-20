@@ -2126,7 +2126,20 @@ func piece_celebrate(node: Node3D) -> void:
 
 
 ## 吃棋：蓄力 → 跃起 → 滞空 → 砸落 → 踩扁 → 溅开 → 收势（七阶段，tween 合计约 1.72s）
-func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Callable()) -> void:
+## 每个职业的吃棋风格：抬高/飞行时长倍率、压扁力度、命中时的专属碎屑
+const KILL_STYLE := {
+	0: {"lift": 1.00, "fly": 1.00, "squash": 1.00, "fx": "ring"},    # 骑士
+	1: {"lift": 1.35, "fly": 1.10, "squash": 0.85, "fx": "rune"},    # 法师
+	2: {"lift": 0.78, "fly": 0.85, "squash": 0.90, "fx": "slash"},   # 弓手
+	3: {"lift": 1.15, "fly": 1.15, "squash": 1.40, "fx": "dome"},    # 国王
+	4: {"lift": 0.70, "fly": 0.78, "squash": 0.80, "fx": "slash"},   # 刺客
+	5: {"lift": 1.25, "fly": 1.25, "squash": 1.30, "fx": "ring"},    # 守卫
+	6: {"lift": 1.10, "fly": 1.00, "squash": 0.95, "fx": "star"},    # 女武神
+	7: {"lift": 1.05, "fly": 1.05, "squash": 1.20, "fx": "shard"},   # 机械兵
+}
+
+func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Callable(),
+		style := 0, variant := 0) -> void:
 	if attacker == null or not is_instance_valid(attacker):
 		return
 	var a := _actor_of(attacker)
@@ -2139,6 +2152,35 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Cal
 	var flat := Vector2(vpos.x - start.x, vpos.z - start.z)
 	if flat.length() > 1.0:
 		attacker.rotation.y = atan2(vpos.x - start.x, vpos.z - start.z)
+	# ---- 职业风格 × 三套动作：0 跃斩 / 1 横扫 / 2 压顶 ----
+	var st: Dictionary = KILL_STYLE.get(posmod(style, KILL_STYLE.size()), KILL_STYLE[0])
+	var v: int = posmod(variant, 3)
+	var lift_m: float = st["lift"]
+	var fly_m: float = st["fly"]
+	var sq_pow: float = st["squash"]
+	var spin: float = PI            # 半圈翻转
+	var side := 0.0                 # 落点侧移（横扫时落在目标侧边）
+	var hover_t := 0.10
+	match v:
+		1:
+			lift_m *= 0.72
+			fly_m *= 0.82
+			sq_pow *= 0.55
+			spin = TAU * 2.0            # 两整圈横扫
+			side = 54.0
+			hover_t = 0.05
+		2:
+			lift_m *= 1.35
+			fly_m *= 1.20
+			sq_pow *= 1.50
+			spin = 0.0                  # 不转，直上直下压顶
+			hover_t = 0.18
+	var land: Vector3 = vpos
+	if side != 0.0:
+		var dir2: Vector2 = flat.normalized() if flat.length() > 1.0 else Vector2(0.0, 1.0)
+		var perp := Vector2(-dir2.y, dir2.x) * side
+		land = vpos + Vector3(perp.x, 0.0, perp.y)
+		attacker.rotation.y = atan2(land.x - start.x, land.z - start.z)
 	# 受害者身体：能从 _actor_of 取到就抖身体，取不到就抖根节点
 	var vbody: Node3D = null
 	if has_victim:
@@ -2147,6 +2189,7 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Cal
 			vbody = va["body"]
 	var vshake: Node3D = vbody if vbody != null else victim
 	# 1. 蓄力 0.20s：攻击方下蹲，目标方原地发抖
+	fx_sound("cap_charge")
 	if has_victim and is_instance_valid(vshake):
 		var tremble := create_tween()
 		tremble.tween_property(vshake, "rotation:y", 0.16, 0.05)
@@ -2161,25 +2204,31 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Cal
 		await crouch.finished
 	else:
 		await get_tree().create_timer(0.20).timeout
-	# 2. 跃起 0.36s：沿抛物线飞到目标正上方，身体拉长并自旋半圈
-	fx_sound("cap_jump")
-	var apex := Vector3(vpos.x, start.y + 200.0, vpos.z)
+	# 2. 跃起：沿抛物线飞到目标正上方，身体拉长并自旋半圈
+	#    跳杀时起点就是起跳格，距离可能横跨半张棋盘：飞得越远越高、滞空越久
+	var leap: float = flat.length()
+	var fly: float = clampf(0.36 + leap / 5200.0, 0.36, 0.72) * fly_m
+	var lift: float = clampf(200.0 + leap * 0.10, 200.0, 480.0) * lift_m
+	fx_sound("cap_jump" if v != 1 else "cap_whoosh")
+	var apex := Vector3(land.x, start.y + lift, land.z)
 	var jump := create_tween()
 	jump.set_parallel(true)
-	jump.tween_property(attacker, "position", apex, 0.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	jump.tween_property(attacker, "rotation:y", attacker.rotation.y + PI, 0.36)
+	jump.tween_property(attacker, "position", apex, fly).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if spin != 0.0:
+		jump.tween_property(attacker, "rotation:y", attacker.rotation.y + spin, fly)
 	if body != null:
 		jump.tween_property(body, "position:y", 0.0, 0.20)
 		jump.tween_property(body, "scale", Vector3(0.92, 1.18, 0.92), 0.20)
 	await jump.finished
 	# 3. 滞空 0.10s：顶点悬停不动，给“跃起”留辨识时间
+	fx_sound("cap_hover", -3.0)
 	var hover := create_tween()
-	hover.tween_interval(0.10)
+	hover.tween_interval(hover_t)
 	await hover.finished
 	# 4. 砸落 0.16s：QUART 加速直坠，身体压扁
 	var fall := create_tween()
 	fall.set_parallel(true)
-	fall.tween_property(attacker, "position", vpos, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
+	fall.tween_property(attacker, "position", land, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
 	if body != null:
 		fall.tween_property(body, "scale", Vector3(1.24, 0.80, 1.24), 0.16)
 	await fall.finished
@@ -2195,20 +2244,45 @@ func capture_stomp(attacker: Node3D, victim: Node3D, color: Color, on_hit := Cal
 	if on_hit.is_valid():
 		on_hit.call()
 	# 5. 踩扁 0.10s：目标瞬间压成一张薄片
-	fx_sound("cap_squash")
+	fx_sound("cap_squash", -2.0 if v == 2 else 0.0, 0.92 if v == 2 else 1.0)
+	var sq_w: float = 1.30 + 0.26 * sq_pow
+	var sq_h: float = clampf(0.105 / maxf(sq_pow, 0.35), 0.045, 0.22)
 	var squash := create_tween()
 	squash.set_parallel(true)
 	squash.tween_interval(0.10)
 	if has_victim and is_instance_valid(victim):
-		squash.tween_property(victim, "scale", Vector3(1.55, 0.06, 1.55), 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		squash.tween_property(victim, "scale", Vector3(sq_w, sq_h, sq_w), 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		squash.tween_property(victim, "rotation", Vector3.ZERO, 0.10)
 	await squash.finished
 	# 6. 溅开 0.55s：一滩 + 两圈错开冲击波 + 碎屑 + 中心闪光（主流程等 0.50s 后收势）
+	fx_sound("cap_splash", -2.0)
 	puddle(vpos, color)
 	_shockwave(vpos, color, 0.0, 3.2, 0.55)
 	_shockwave(vpos, color.lightened(0.25), 0.06, 4.6, 0.55)
 	_fx_shards(Vector3(vpos.x, TILE_TOP + 2.0, vpos.z), color.lightened(0.2), 10, 70.0, 90.0, 6.0, 0.55)
 	capture_blast(vpos, color)
+	# 职业专属收尾：同一记击杀，八个职业炸出各自的东西
+	var gk := Vector3(vpos.x, TILE_TOP + 2.0, vpos.z)
+	match String(st["fx"]):
+		"rune":
+			_fx_runes(gk, color, 46.0, 7)
+			_fx_dome(gk, color, 70.0, 0.4)
+		"slash":
+			_fx_slashes(gk, color, 4)
+		"dome":
+			_fx_dome(gk, color, 92.0, 0.5)
+			_shockwave(vpos, color, 0.0, 6.0, 0.6)
+		"star":
+			_fx_stars(gk, color)
+		"shard":
+			_fx_shards(gk, color.lightened(0.35), 12, 96.0, 120.0, 7.0, 0.6)
+		_:
+			_shockwave(vpos, color, 0.04, 5.4, 0.55)
+	# 横扫落点在目标侧边，收势时补回目标格，保证逻辑位置与画面一致
+	if land != vpos:
+		var back2 := create_tween()
+		back2.tween_property(attacker, "position", vpos, 0.16).set_trans(Tween.TRANS_SINE)
+		await back2.finished
 	var splash := create_tween()
 	splash.tween_interval(0.50)
 	await splash.finished
