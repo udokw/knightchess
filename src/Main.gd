@@ -244,6 +244,7 @@ var _update_demo := ""
 var _selftest_update := false
 var _selftest_pounce := false
 var _selftest_stack := false
+var _selftest_lanfix := false
 var _plugin_wired := false
 var _net_dirty := false
 var _net_push_ms := 0
@@ -321,6 +322,8 @@ func _ready() -> void:
 			_selftest_pounce = true
 		elif a == "--selftest-stack":
 			_selftest_stack = true
+		elif a == "--selftest-lanfix":
+			_selftest_lanfix = true
 		elif a.begins_with("--update-demo="):
 			_update_demo = a.substr(14)
 		elif a.begins_with("--settings-tab="):
@@ -422,6 +425,9 @@ func _ready() -> void:
 
 	if _selftest_stack:
 		_run_stack_selftest()
+		return
+	if _selftest_lanfix:
+		_run_lanfix_selftest()
 		return
 
 	if _cli_lan_host:
@@ -717,6 +723,26 @@ func _cine_restore(dur := 0.45) -> void:
 	_cam_home.clear()
 
 
+## 开始页预览场景：顺带写回 authority，否则联机开局下发的是旧场景
+func _on_theme_previewed(id: String) -> void:
+	if net_role == "guest":
+		hud.set_theme_id(theme_id)
+		arena.set_theme(theme_id)
+		return
+	theme_id = id
+	arena.set_theme(id)
+	_refresh_rule_hint()
+
+
+## 对局菜单里换场景：客机只读，房主切换后随快照同步
+func _on_theme_selected(id: String) -> void:
+	if net_role == "guest":
+		hud.set_theme_id(theme_id)
+		arena.set_theme(theme_id)
+		return
+	_theme_swap(id)
+
+
 ## 场景切换：世界重铸 —— 高光闪 + 地面涟漪 + 镜头轻推远再回位
 func _theme_swap(id: String) -> void:
 	if _theme_swapping:
@@ -849,8 +875,8 @@ func _setup_hud() -> void:
 	hud.piece_pressed.connect(_on_piece_pressed)
 	hud.start_pressed.connect(_start_match)
 	hud.roulette_tick.connect(func(): _play(sfx_tick))
-	hud.theme_previewed.connect(func(id: String): arena.set_theme(id))
-	hud.theme_selected.connect(func(id: String): _theme_swap(id))
+	hud.theme_previewed.connect(_on_theme_previewed)
+	hud.theme_selected.connect(_on_theme_selected)
 	hud.sound_toggled.connect(func(on: bool):
 		_sfx_on = on
 		if sfx != null:
@@ -1455,6 +1481,7 @@ func _lan_leave_clicked() -> void:
 	match_started = false
 	game_over = false
 	busy = false
+	hud.set_theme_locked(false)
 	hud.set_lan_idle()
 	hud.set_lan_status("已离开联机", Color(1, 1, 1, 0.55))
 	hud.set_dice(0)
@@ -1516,6 +1543,7 @@ func _lan_start_clicked() -> void:
 	human_teams = humans
 	active_teams = act
 	net_role = "host"
+	hud.set_theme_locked(false)
 	_net_dirty = false
 	lan.start_match(_net_payload())
 	hud.hide_start()
@@ -1606,21 +1634,20 @@ func _on_lan_intent(p: Dictionary) -> void:
 		if _duel_active and actor == _duel_team:
 			_duel_pick = clampi(int(p.get("pick", 0)), 0, 2)
 		return
-	if current_team != actor:
-		return
-	if busy or game_over or not match_started:
+	if current_team != actor or game_over or not match_started:
 		return
 	var a := String(p.get("a", ""))
 	if a == "roll":
-		if awaiting_pick or card_mode != "":
+		if busy or awaiting_pick or card_mode != "":
 			return
 		_do_roll()
 	elif a == "pick":
+		# 出发/走子选择期间 busy 仍为 true，不能因此丢掉客机送来的选择
 		if awaiting_pick or card_mode != "":
-			_on_piece_pressed(int(p.get("i", -1)))
+			_do_pick(int(p.get("i", -1)))
 	elif a == "card":
-		if not awaiting_pick and card_mode == "":
-			_on_card_pressed(int(p.get("s", -1)))
+		if card_mode == "":
+			_do_card(int(p.get("s", -1)))
 
 
 func _on_lan_link_lost(final: bool) -> void:
@@ -1630,6 +1657,7 @@ func _on_lan_link_lost(final: bool) -> void:
 	match_started = false
 	game_over = false
 	busy = false
+	hud.set_theme_locked(false)
 	hud.set_lan_idle()
 	hud.show_lan()
 	hud.set_lan_status("与房主的连接已断开，请重新加入", Color("ff6b6b"))
@@ -1658,6 +1686,12 @@ func _net_payload() -> Dictionary:
 			"until": _duel_until,
 		},
 	}
+	# human_teams 里可能残留断线保留的座位，按当前实际托管状态下发真人座次
+	var humans_now: Array = []
+	for t in 4:
+		if not _is_ai(t):
+			humans_now.append(t)
+	st["game"]["human_teams"] = humans_now
 	return st
 
 
@@ -1675,6 +1709,15 @@ func _apply_net(st: Dictionary) -> void:
 			clampi(int(g.get("cells", 40)), 40, 64), g.get("styles", char_styles))
 		human_teams = [net_guest_team]
 		net_role = "guest"
+		hud.set_theme_locked(true)
+	# 房主下发的真人座次（含房主自己），客机照此显示
+	var humans_net: Variant = g.get("human_teams", null)
+	if humans_net is Array:
+		human_teams = []
+		for t in humans_net:
+			human_teams.append(int(t))
+		if not (net_guest_team in human_teams):
+			human_teams.append(net_guest_team)
 	_refresh_rule_hint()
 	var at: Variant = g.get("active_teams", [])
 	if at is Array and not at.is_empty():
@@ -2207,6 +2250,49 @@ func _run_stack_selftest() -> void:
 	get_tree().quit()
 
 
+## 联机回归：房主显示、主题锁定、客机出发选棋意图
+func _run_lanfix_selftest() -> void:
+	var notes: Array = []
+	# 房主那一席在客机看来必须是人类
+	net_role = "guest"
+	net_guest_team = 1
+	human_teams = [0, 1]
+	notes.append(["guest-ai", not _is_ai(0) and not _is_ai(1) and _is_ai(2)])
+	# 客机改不了主题，房主可以
+	_start_match(2, 1, "cozy", board_cells, char_styles)
+	net_role = "guest"
+	_on_theme_previewed("void")
+	notes.append(["guest-theme", theme_id == "cozy"])
+	net_role = "host"
+	_on_theme_previewed("frost")
+	notes.append(["host-theme", theme_id == "frost"])
+	# 出发选择阶段 busy 仍为 true，客机 pick 意图必须能走完
+	for probe in [[5, "cozy"], [6, "dune"]]:
+		_start_match(2, 1, String(probe[1]), board_cells, char_styles)
+		human_teams = [0, 1]
+		net_role = "host"
+		current_team = 1
+		busy = true
+		awaiting_pick = true
+		pending_total = _theme_roll_total(int(probe[0]))
+		var idx := -1
+		for i in pieces.size():
+			if int(pieces[i]["team"]) == 1 and int(pieces[i]["cell"]) < 0:
+				idx = i
+				break
+		_on_lan_intent({"a": "pick", "i": idx, "seat": 1})
+		var deadline := Time.get_ticks_msec() + 8000
+		while Time.get_ticks_msec() < deadline and int(pieces[idx]["cell"]) < 0:
+			await get_tree().create_timer(0.1).timeout
+		notes.append(["pick-%d->%d" % [int(probe[0]), pending_total], idx >= 0 and int(pieces[idx]["cell"]) >= 0])
+	var ok := true
+	for n in notes:
+		if not bool(n[1]):
+			ok = false
+	print("SELFTEST_LANFIX ", "OK" if ok else "FAIL", " ", notes)
+	get_tree().quit()
+
+
 func _run_rules_selftest() -> void:
 	_start_match(0, 1, "frost", board_cells, char_styles)
 	var p: Dictionary = pieces[0]
@@ -2292,6 +2378,8 @@ func _start_match(mode: int, level: int, selected_theme: String, cells := 40, st
 	elif styles_changed:
 		_rebuild_pieces()
 	arena.set_theme(theme_id)
+	if hud != null:
+		hud.set_theme_id(theme_id)
 	_fit_camera()
 	_refresh_rule_hint()
 	if rules_enabled:
@@ -2384,6 +2472,9 @@ func _goal_pos(team: int, slot: int) -> Vector3:
 
 
 func _is_ai(team: int) -> bool:
+	# 客机：自己这一席一定是人类；其余按房主快照里的真人座位判断（房主那席也在里面）
+	if net_role == "guest":
+		return team != net_guest_team and not (team in human_teams)
 	# 局域网房主：断线座位即使仍保留在 human_teams 里，也立刻交给 AI
 	if net_role == "host" and team != 0:
 		return lan == null or not lan.is_human_seat(team)
@@ -2914,6 +3005,11 @@ func _on_piece_pressed(idx: int) -> void:
 		return
 	if net_role == "host" and current_team != 0:
 		return
+	_do_pick(idx)
+
+
+## 真正执行「选棋」：本地点击与房主代客机执行共用这一段
+func _do_pick(idx: int) -> void:
 	if card_mode != "":
 		await _apply_card(idx)
 		return
@@ -3228,6 +3324,11 @@ func _on_card_pressed(slot: int) -> void:
 		return
 	if net_role == "host" and current_team != 0:
 		return
+	_do_card(slot)
+
+
+## 真正执行「用道具」：本地点击与房主代客机执行共用这一段
+func _do_card(slot: int) -> void:
 	if busy or game_over or awaiting_pick or not match_started:
 		return
 	if _is_ai(current_team) or card_mode != "":
@@ -5162,6 +5263,7 @@ func _update_all() -> void:
 				fin += 1
 		status.append({
 			"name": TEAM_NAMES[t], "color": TEAM_COLORS[t], "ai": _is_ai(t),
+			"you": _is_local_actor(t),
 			"finished": fin, "captures": captures[t], "cards": cards[t].size(),
 			"current": t == current_team,
 		})

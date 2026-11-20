@@ -1,0 +1,4 @@
+[config]
+name="KnightLan"
+binary_type="local"
+binary="KnightLan.aar"

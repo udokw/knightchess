@@ -6,8 +6,8 @@ on:
     tags: ["v*"]
 
 env:
-  VERSION_NAME: "1.0.3"
-  VERSION_CODE: "4"
+  VERSION_NAME: "1.0.4"
+  VERSION_CODE: "5"
   GODOT_VERSION: "4.3-stable"
   GODOT_TEMPLATE_DIR: "4.3.stable"
 
@@ -148,6 +148,10 @@ jobs:
             || { echo "缺少 REQUEST_INSTALL_PACKAGES"; exit 1; }
           "$AAPT" dump xmltree build/KnightChess.apk AndroidManifest.xml | grep -q "org.godotengine.plugin.v2.KnightUpdate" \
             || { echo "KnightUpdate 插件未注册"; exit 1; }
+          "$AAPT" dump xmltree build/KnightChess.apk AndroidManifest.xml | grep -q "org.godotengine.plugin.v2.KnightLan" \
+            || { echo "KnightLan 插件未注册"; exit 1; }
+          "$AAPT" dump badging build/KnightChess.apk | grep -q "CHANGE_WIFI_MULTICAST_STATE" \
+            || { echo "缺少 CHANGE_WIFI_MULTICAST_STATE"; exit 1; }
           echo "APK 版本与插件校验通过"
 
       - name: 上传 APK
@@ -272,20 +276,20 @@ jobs:
           test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
           TAG="v${VERSION_NAME}"
           cat > notes.md <<'EOF'
-          ## 骑士飞行棋3 v1.0.3
+          ## 骑士飞行棋3 v1.0.4
 
           ### 本次改动
-          - 对局左上角（菜单按钮右侧）新增场景规则提示；联机客机按房主下发的场景同步显示
-          - 修复同格吃棋重复结算：一次踩落只吃一枚，带护盾的那枚只破盾不死
-          - 修复换位卡：按棋盘实际占用格互换，不再因各队环道起点不同而「各走一段」；不可进入的终点通道按降级规则处理并在战报说明
-          - 安卓改用固定发布密钥签名，可覆盖安装后续版本
+          - 修复局域网客机把房主显示成 AI 的问题，两端队伍栏与回合提示一致
+          - 客机跟随房主选择的棋盘主题；客机端换主题入口置灰，房主权威
+          - 修复客机掷出 6 点（含场景强化后的 6 点）出发选择无响应、棋子出不了基地导致卡死的问题
+          - 安卓局域网自动搜房：新增 MulticastLock 支持，修复广播包被 Wi-Fi 驱动过滤导致互相搜不到房间的问题；发现日志新增收发计数
 
           ### 安装包
           - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
           - `KnightChess.apk` — 固定发布密钥签名，可直接安装；签名 SHA-256 指纹见 Release 说明
 
           签名证书 SHA-256：`13FB C983 CE20 B3DC 7BFB BBC1 3327 B397 6920 9EBE 84AD 146D 7C89 FE58 2C00 FBDE`
-          版本 1.0.3（build 4）
+          版本 1.0.4（build 5）
           EOF
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$IPA" --clobber

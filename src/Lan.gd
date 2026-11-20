@@ -79,9 +79,24 @@ var _rooms_key := ""
 var _bcast_cache: Array = []
 var _hinted_no_room := false
 
+# ---- 发现诊断：判断「没发出 / 发出没收到 / 收到但被判不合法」
+var _diag := false
+var _diag_tx_query := 0
+var _diag_tx_announce := 0
+var _diag_tx_reply := 0
+var _diag_tx_err := 0
+var _diag_rx_query := 0
+var _diag_rx_reply := 0
+var _diag_rx_announce := 0
+var _diag_rx_bad := 0
+var _diag_drops: Dictionary = {}
+var _diag_last_report := 0
+var _multicast_held := false
+
 
 func _ready() -> void:
 	set_process(false)
+	_diag = OS.get_cmdline_args().has("--lan-diag") or OS.get_cmdline_user_args().has("--lan-diag")
 
 
 func local_ipv4() -> String:
@@ -134,8 +149,51 @@ func _discovery_send_socket() -> PacketPeerUDP:
 
 func _send_discovery(sock: PacketPeerUDP, body: PackedByteArray, port: int) -> void:
 	for t in discovery_targets():
-		sock.set_dest_address(String(t), port)
-		sock.put_packet(body)
+		var e1 := sock.set_dest_address(String(t), port)
+		var e2 := sock.put_packet(body) if e1 == OK else e1
+		if e2 != OK:
+			_diag_tx_err += 1
+			if _diag_on():
+				print("LAN_DIAG tx_fail target=", String(t), " err=", e2)
+
+
+# Android 的 Wi-Fi 驱动默认过滤广播/组播包，必须持有 MulticastLock 才收得到
+func _acquire_multicast() -> void:
+	if not Engine.has_singleton("KnightLan"):
+		return
+	var plugin: Object = Engine.get_singleton("KnightLan")
+	if plugin == null or not plugin.has_method("acquireMulticastLock"):
+		return
+	plugin.call("acquireMulticastLock")
+	_multicast_held = bool(plugin.call("isMulticastLockHeld"))
+
+
+func _release_multicast() -> void:
+	if _multicast_held and Engine.has_singleton("KnightLan"):
+		var plugin: Object = Engine.get_singleton("KnightLan")
+		if plugin != null and plugin.has_method("releaseMulticastLock"):
+			plugin.call("releaseMulticastLock")
+	_multicast_held = false
+
+
+func _diag_on() -> bool:
+	return _diag or OS.is_debug_build()
+
+
+func _diag_drop(reason: String) -> void:
+	_diag_rx_bad += 1
+	_diag_drops[reason] = int(_diag_drops.get(reason, 0)) + 1
+
+
+func _diag_report() -> void:
+	var now := Time.get_ticks_msec()
+	if not _diag_on() or now - _diag_last_report < 5000:
+		return
+	_diag_last_report = now
+	print("LAN_DIAG role=", role, " rx_q=", _diag_rx_query, " rx_r=", _diag_rx_reply,
+		" rx_a=", _diag_rx_announce, " tx_q=", _diag_tx_query, " tx_a=", _diag_tx_announce,
+		" tx_r=", _diag_tx_reply, " tx_err=", _diag_tx_err, " bad=", _diag_rx_bad,
+		" drop=", _diag_drops, " lock=", _multicast_held)
 
 
 func is_guest_connected() -> bool:
@@ -193,8 +251,12 @@ func start_host(config: Dictionary, display_name := "") -> bool:
 		_udp_send.set_broadcast_enabled(true)
 	else:
 		_udp_send = null
-	if OS.is_debug_build():
-		print("LAN_DISCOVERY host targets=", discovery_targets(), " port=", discovery_port)
+	_acquire_multicast()
+	if _diag_on():
+		print("LAN_DISCOVERY host udp_recv=", _udp_recv.get_local_port(), " ok=", _udp_ok,
+			" udp_send=", -1 if _udp_send == null else _udp_send.get_local_port(),
+			" tcp=", tcp_port, " targets=", discovery_targets(), " port=", discovery_port,
+			" lock=", _multicast_held)
 
 	_last_announce = 0
 	set_process(true)
@@ -316,8 +378,11 @@ func join(ip: String, room: String, display_name := "") -> bool:
 	_open_discovery()
 	_hinted_no_room = false
 	set_process(true)
-	if OS.is_debug_build():
-		print("LAN_DISCOVERY join targets=", discovery_targets(), " port=", discovery_port)
+	if _diag_on():
+		print("LAN_DISCOVERY join udp_recv=", _udp_recv.get_local_port() if _udp_recv != null else -1,
+			" ok=", _udp_ok, " manual_ip=", _manual_ip, " room=", _want_room,
+			" targets=", discovery_targets(), " port=", discovery_port,
+			" lock=", _multicast_held)
 	if _manual_ip != "":
 		status.emit("正在连接 %s …" % _manual_ip, Color(1, 1, 1, 0.65))
 	else:
@@ -346,6 +411,7 @@ func _open_discovery() -> void:
 	else:
 		_udp_send = null
 	_last_query = 0
+	_acquire_multicast()
 
 
 func leave() -> void:
@@ -354,6 +420,7 @@ func leave() -> void:
 
 func stop() -> void:
 	_send_msg({"v": PROTO, "t": "bye"})
+	_release_multicast()
 	for l in _links:
 		_send_to(l, {"v": PROTO, "t": "bye"})
 		var gp: StreamPeerTCP = l.get("peer", null)
@@ -430,10 +497,14 @@ func _process_host() -> void:
 			var src_port := _udp_recv.get_packet_port()
 			var parsed: Variant = JSON.parse_string(raw.get_string_from_utf8())
 			if not (parsed is Dictionary):
+				_diag_drop("host_bad_json")
 				continue
 			var t := _norm_kind(String(parsed.get("t", "")))
 			if t == "room_query":
+				_diag_rx_query += 1
 				_announce("room_reply", src, src_port)
+			elif t == "room_reply" or t == "room_announce":
+				_diag_rx_announce += 1
 
 	# 回座保留超时：空位正式交给 AI
 	var expired: Array = []
@@ -452,6 +523,7 @@ func _process_host() -> void:
 			seats[s]["ready"] = true
 			status.emit("%d 号座位回座超时，已交给 AI" % (s + 1), Color("ffb86b"))
 			_flush_lobby()
+	_diag_report()
 
 
 func _process_guest() -> void:
@@ -479,6 +551,7 @@ func _process_guest() -> void:
 		_last_ping = now
 		_send_msg({"v": PROTO, "t": "ping"})
 	_prune_rooms(now)
+	_diag_report()
 
 
 # ---------------------------------------------------------------- 连接管理（房主）
@@ -802,7 +875,9 @@ func _send_query() -> void:
 	if _manual_ip != "":
 		sock.set_dest_address(_manual_ip, discovery_port)
 		sock.put_packet(body)
+		_diag_tx_query += 1
 	_send_discovery(sock, body, discovery_port)
+	_diag_tx_query += discovery_targets().size()
 
 
 func _announce(kind: String, target := "", target_port := 0) -> void:
@@ -818,8 +893,10 @@ func _announce(kind: String, target := "", target_port := 0) -> void:
 	if target != "":
 		sock.set_dest_address(target, target_port if target_port > 0 else discovery_port)
 		sock.put_packet(body)
+		_diag_tx_reply += 1
 	else:
 		_send_discovery(sock, body, discovery_port)
+		_diag_tx_announce += discovery_targets().size()
 
 
 func _norm_kind(t: String) -> String:
@@ -835,21 +912,30 @@ func _norm_kind(t: String) -> String:
 
 
 func _absorb_room(pkt: Dictionary, src: String) -> void:
-	if String(pkt.get("game", "")) != GAME:
-		return
-	if int(pkt.get("v", PROTO)) != PROTO:
-		return
 	var kind := _norm_kind(String(pkt.get("t", "")))
 	if kind != "room_reply" and kind != "room_announce":
+		return
+	if kind == "room_reply":
+		_diag_rx_reply += 1
+	else:
+		_diag_rx_announce += 1
+	if String(pkt.get("game", "")) != GAME:
+		_diag_drop("game")
+		return
+	if int(pkt.get("v", PROTO)) != PROTO:
+		_diag_drop("version")
 		return
 	var rid := String(pkt.get("room", ""))
 	var rid_iid := String(pkt.get("iid", ""))
 	var port := int(pkt.get("port", 0))
 	if rid.length() != 4 or port <= 0:
+		_diag_drop("room_or_port")
 		return
 	if _manual_ip != "" and src != _manual_ip:
+		_diag_drop("manual_ip")
 		return
 	if _want_room != "" and rid != _want_room:
+		_diag_drop("room_filter")
 		return
 	var prev: Dictionary = _rooms.get(rid, {})
 	if not prev.is_empty() and String(prev.get("iid", "")) == rid_iid and String(prev.get("ip", "")) == src:

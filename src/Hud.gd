@@ -219,6 +219,9 @@ var _hint_override := ""
 var _mode := 0
 var _level := 1
 var _theme_id := "dusk"
+var _theme_locked := false
+var _theme_title_label: Label
+var _settings_theme_btns: Array = []
 var _mode_buttons: Array = []
 var _level_buttons: Array = []
 var _start_theme_buttons: Array = []
@@ -568,7 +571,9 @@ func _build_menu() -> void:
 	vb.add_child(_pick_toggle)
 
 	vb.add_child(_spacer(4))
-	vb.add_child(_label("棋盘主题", 12, Color(1, 1, 1, 0.42)))
+	var theme_title: Label = _label("棋盘主题", 12, Color(1, 1, 1, 0.42))
+	_theme_title_label = theme_title
+	vb.add_child(theme_title)
 	_theme_row = GridContainer.new()
 	_theme_row.columns = 4
 	_theme_row.add_theme_constant_override("h_separation", 5)
@@ -661,11 +666,33 @@ func _paint_rules_button() -> void:
 
 
 func _pick_theme(id: String) -> void:
+	if _theme_locked:
+		return
 	_theme_id = id
 	_paint_theme_btns()
 	theme_selected.emit(id)
 	if not _applying_prefs:
 		prefs_changed.emit()
+
+
+## 外部同步当前场景（客机跟随房主）：只刷新高亮，不发信号
+func set_theme_id(id: String) -> void:
+	_theme_id = id
+	_paint_theme_btns()
+	_paint_choice(_start_theme_buttons, THEME_IDS.find(id))
+
+
+## 房主权威：客机禁用所有换场景入口
+func set_theme_locked(locked: bool) -> void:
+	_theme_locked = locked
+	for b in _theme_btns:
+		(b as Button).disabled = locked
+	for b in _start_theme_buttons:
+		(b as Button).disabled = locked
+	for b in _settings_theme_btns:
+		(b as Button).disabled = locked
+	if _theme_title_label != null:
+		_theme_title_label.text = "棋盘主题（房主决定）" if locked else "棋盘主题"
 
 
 func _paint_theme_btns() -> void:
@@ -1866,6 +1893,7 @@ func _build_settings() -> void:
 		var tid: String = THEME_IDS[i]
 		b.pressed.connect(func(): _pick_theme(tid))
 		grid.add_child(b)
+		_settings_theme_btns.append(b)
 
 	var upd: VBoxContainer = bodies[3]
 	_s_update_button = _btn("更新检查：开", Vector2(0, 48), 16)
@@ -2087,6 +2115,8 @@ func _select_level(i: int) -> void:
 
 
 func _select_theme(id: String) -> void:
+	if _theme_locked:
+		return
 	_theme_id = id
 	_paint_choice(_start_theme_buttons, THEME_IDS.find(id))
 	_paint_theme_btns()
@@ -2863,7 +2893,8 @@ func set_teams(status: Array) -> void:
 		var chip: Dictionary = _team_chips[t]
 		var s: Dictionary = status[t]
 		var name_l: Label = chip["name"]
-		name_l.text = ("▶ " if s["current"] else "") + s["name"] + ("  AI" if s["ai"] else "  你")
+		var tag := "  AI" if s["ai"] else ("  你" if bool(s.get("you", false)) else "")
+		name_l.text = ("▶ " if s["current"] else "") + s["name"] + tag
 		name_l.add_theme_color_override("font_color", s["color"])
 		var info: Label = chip["info"]
 		info.text = "%d/4 · 吃%d · 卡%d" % [s["finished"], s["captures"], s["cards"]]
