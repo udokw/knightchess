@@ -194,9 +194,27 @@ func resolve_link(file: Dictionary) -> Dictionary:
 	if not bool(res["ok"]):
 		return {"ok": false, "url": "", "error": String(res["error"]) + "\n可改用浏览器打开分享页。"}
 	var code := int(res["code"])
-	if code not in [301, 302, 303, 307, 308] or String(res["location"]) == "":
-		return {"ok": false, "url": "", "error": "没有拿到下载跳转地址（HTTP %d，接口可能已变化）。" % code}
-	return {"ok": true, "url": String(res["location"]), "error": ""}
+	var location := String(res["location"])
+	if code not in [301, 302, 303, 307, 308]:
+		# 接口直接回 JSON/HTML 时不会有 Location，必须显式失败，别把错误页当安装包
+		return {"ok": false, "url": "", "error": "接口没有返回下载跳转（HTTP %d），实际地址：%s\n可改用浏览器打开分享页。" % [
+			code, location if location != "" else "（无）"]}
+	if not is_direct_link(location):
+		return {"ok": false, "url": "", "error": "拿到的不是安装包直链：%s\n可改用浏览器打开分享页。" % location.substr(0, 160)}
+	return {"ok": true, "url": location, "error": ""}
+
+
+## 直链识别（模板第 14 节）：share/api 域一律不算，必须是带签名的 CDN 地址
+static func is_direct_link(url: String) -> bool:
+	var u := url.strip_edges().to_lower()
+	if u == "":
+		return false
+	var host := u.trim_prefix("https://").trim_prefix("http://").split("/")[0]
+	if host == "share.feijipan.com" or host.begins_with("api.feijipan") or host.begins_with("api.feijix"):
+		return false
+	if u.contains("download_name="):
+		return true
+	return host.ends_with("feejii.com") or host.ends_with("feijipan.com")
 
 
 ## 读取直链接口的 302 跳转地址。
@@ -270,6 +288,9 @@ func _headers() -> PackedStringArray:
 func _request(url: String, method: int, body := "", max_redirects := 8) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = 12.0
+	# 模板硬性要求：列表请求必须声明 Accept-Encoding（gzip/deflate），否则接口按无效请求回空列表。
+	# Godot 在 accept_gzip 为 true 时自动带上 "Accept-Encoding: gzip, deflate" 并解压响应。
+	http.accept_gzip = true
 	if max_redirects >= 0:
 		http.max_redirects = max_redirects
 	add_child(http)

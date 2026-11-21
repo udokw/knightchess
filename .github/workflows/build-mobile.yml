@@ -6,8 +6,8 @@ on:
     tags: ["v*"]
 
 env:
-  VERSION_NAME: "1.0.5"
-  VERSION_CODE: "6"
+  VERSION_NAME: "1.0.6"
+  VERSION_CODE: "7"
   GODOT_VERSION: "4.3-stable"
   GODOT_TEMPLATE_DIR: "4.3.stable"
 
@@ -276,20 +276,20 @@ jobs:
           test -n "$APK" -a -n "$IPA" || { echo "缺少安装包"; exit 1; }
           TAG="v${VERSION_NAME}"
           cat > notes.md <<'EOF'
-          ## 骑士飞行棋3 v1.0.5
+          ## 骑士飞行棋3 v1.0.6
 
           ### 本次改动
-          - 修复局域网“当前行动棋子”凸显归属：两端都按快照里的实际行动座次定位，不再落到别队棋子上
-          - 客机端补绘行动棋子的头顶箭头与落点提示，切换回合时自动清理，避免陈旧标记残留
-          - 命运事件转盘改为两端同时呈现、同一时刻起播、时长一致；由当前回合玩家点击转动
-          - 房主仍是转盘结果的唯一权威并广播状态；非当事人一端只展示、不可点，修复客机只有音效没有动画的问题
+          - 更新检测对齐 feijipan-update 统一模板：直连分享接口逐层列目录（骑士飞行棋 → ios / 安卓），直链只用 HTTPClient 读取 302 的 Location
+          - 列表请求显式开启 gzip（Accept-Encoding），避免接口按无效请求返回空列表被误判成「分享目录为空」
+          - 直链必须命中 CDN 签名地址（`download_name=` 或 `*.feejii.com` / `*.feijipan.com`），接口直接回 JSON/HTML 时立即失败，不再把错误页交给下载器
+          - 取链失败提示带上实际 HTTP 码与地址，便于真机取证；仍保留「浏览器打开分享页」兜底
 
           ### 安装包
           - `KnightChess-unsigned.ipa` — 未签名 IPA，需自签/侧载（AltStore、Sideloadly、TrollStore 等）
           - `KnightChess.apk` — 固定发布密钥签名，可直接安装；签名 SHA-256 指纹见 Release 说明
 
           签名证书 SHA-256：`13FB C983 CE20 B3DC 7BFB BBC1 3327 B397 6920 9EBE 84AD 146D 7C89 FE58 2C00 FBDE`
-          版本 1.0.5（build 6）
+          版本 1.0.6（build 7）
           EOF
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$IPA" --clobber
